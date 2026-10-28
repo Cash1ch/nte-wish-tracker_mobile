@@ -1,0 +1,8 @@
+# Отладка на ПК (python main.py): тот же интерфейс, но OCR через настоящий pytesseract
+kivy==2.3.0
+pillow
+numpy
+opencv-python
+pytesseract
+certifi
+pytest
