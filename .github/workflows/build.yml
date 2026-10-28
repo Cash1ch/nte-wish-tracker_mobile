@@ -18,7 +18,7 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev
 
       - name: Install Buildozer
-        run: pip install buildozer "cython<3" virtualenv
+        run: pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv
 
       - name: Build APK
         run: |
