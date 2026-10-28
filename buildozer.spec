@@ -10,7 +10,9 @@ version = 0.1.0
 
 # opencv — самый капризный рецепт p4a; без него nte_core сам переключится на конвейер Pillow
 # (ocr_image -> _ocr_pipeline_pil), но точность будет ниже.
-requirements = python3,kivy==2.3.0,numpy,pillow,opencv,pyjnius,android,certifi,androidstorage4kivy
+requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0,numpy,pillow,opencv,pyjnius,android,certifi,androidstorage4kivy
+
+p4a.branch = v2024.01.21
 
 orientation = portrait
 fullscreen = 0
