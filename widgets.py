@@ -251,3 +251,49 @@ class BackgroundLayer(FloatLayout):
 
     def _sync(self, *_):
         self._shade.pos, self._shade.size = self.pos, self.size
+
+
+class WelcomeOverlay(FloatLayout):
+    """Стартовое окно первого запуска в общем стиле: стеклянная карточка по центру,
+    золотой заголовок, поле никнейма, золотая кнопка и импорт истории с ПК."""
+    def __init__(self, on_start, on_import, **kw):
+        super().__init__(size_hint=(1, 1), pos_hint={"x": 0, "y": 0}, **kw)
+        from kivy.graphics import Color, Rectangle
+        from kivy.uix.textinput import TextInput
+        with self.canvas.before:
+            Color(0.04, 0.05, 0.10, 0.62)
+            self._dim = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync, size=self._sync)
+        card = Glass(size_hint=(0.9, None), pos_hint={"center_x": 0.5, "center_y": 0.55},
+                     padding=dp(22), spacing=dp(12))
+        card.add_widget(WLabel(text="[b][color=ffd740]NTE[/color]  Wish Tracker[/b]",
+                               font_size=dp(30), halign="center"))
+        card.add_widget(WLabel(text="[color=b9bdd0]Трекер круток Neverness to Everness[/color]",
+                               font_size=dp(13), halign="center"))
+        card.add_widget(Label(size_hint_y=None, height=dp(6)))
+        card.add_widget(WLabel(text="[color=e3e5f0]Как вас называть?[/color]", font_size=dp(13)))
+        self.nick = TextInput(multiline=False, hint_text="Никнейм", size_hint_y=None, height=dp(50),
+                              background_normal="", background_active="",
+                              background_color=(1, 1, 1, 0.10), foreground_color=(1, 1, 1, 1),
+                              hint_text_color=(1, 1, 1, 0.35), cursor_color=(1, 0.84, 0.25, 1),
+                              padding=(dp(14), dp(14), dp(14), dp(10)), font_size=dp(17))
+        self.nick.bind(on_text_validate=lambda *_: on_start(self.nick.text))
+        card.add_widget(self.nick)
+        self.err = WLabel(text="", font_size=dp(12), color=(1, 0.5, 0.45, 1))
+        card.add_widget(self.err)
+        go = Button(text="Начать", bold=True, size_hint_y=None, height=dp(52), font_size=dp(17),
+                    background_normal="", background_color=(1, 0.84, 0.25, 1), color=(0.1, 0.1, 0.14, 1))
+        go.bind(on_release=lambda *_: on_start(self.nick.text))
+        card.add_widget(go)
+        imp = GBtn(text="Импортировать историю с ПК", font_size=dp(14))
+        imp.bind(on_release=lambda *_: on_import(self.nick.text))
+        card.add_widget(imp)
+        card.add_widget(WLabel(text="[color=8c90a6]История, гарант и статистика хранятся только на этом телефоне.[/color]",
+                               font_size=dp(11), halign="center"))
+        self.add_widget(card)
+
+    def show_error(self, text: str) -> None:
+        self.err.text = text
+
+    def _sync(self, *_):
+        self._dim.pos, self._dim.size = self.pos, self.size

@@ -310,6 +310,24 @@ class Tracker:
         return False
 
     # ---------- импорт истории с ПК (JSON / CSV / файл базы .db) ----------
+    @staticmethod
+    def _normalize_keep_seq(raw: list, fn, label: str):
+        """Как normalize_all, но сохраняет номер seq (порядок внутри одной секунды), если он есть."""
+        valid, errors = [], []
+        for i, r in enumerate(raw, 1):
+            try:
+                rec = fn(r)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{label} {i}: {e}")
+                continue
+            try:
+                if r.get("seq") not in (None, ""):
+                    rec["seq"] = int(r["seq"])
+            except (TypeError, ValueError, AttributeError):
+                pass
+            valid.append(rec)
+        return valid, errors
+
     def read_import(self, path: str) -> dict:
         """Читает файл и проверяет записи, ничего не меняя. Формат определяется по содержимому:
         SQLite-файл (nte_wishes.db с ПК), JSON (крутки + предметы) или CSV."""
@@ -325,10 +343,11 @@ class Tracker:
             raw = C.parse_game_logs(str(p))
             if p.suffix.lower() == ".json" or head.lstrip()[:1] in (b"{", b"["):
                 raw_rw = C.load_json_rewards(p)
-        valid, errors = C.normalize_all(raw, C.normalize_record, "запись")
-        valid_rw, errors_rw = C.normalize_all(raw_rw, C.normalize_reward, "предмет")
+        valid, errors = self._normalize_keep_seq(raw, C.normalize_record, "запись")
+        valid_rw, errors_rw = self._normalize_keep_seq(raw_rw, C.normalize_reward, "предмет")
+        has_seq = any("seq" in r for r in valid + valid_rw)
         return {"kind": "file", "valid": valid, "valid_rw": valid_rw, "errors": errors + errors_rw,
-                "has_rewards": bool(raw_rw)}
+                "has_rewards": bool(raw_rw), "has_seq": has_seq}
 
     def _read_desktop_db(self, p: Path) -> dict:
         import sqlite3
@@ -345,32 +364,39 @@ class Tracker:
                 profs = []
             if not profs:
                 profs = [{"id": 0, "name": "Импорт"}]
-            out = []
+            out, all_errors = [], []
             for pr in profs:
                 where, args = (" WHERE profile_id = ?", (pr["id"],)) if has_pid else ("", ())
                 wishes = [dict(r) for r in src.execute(
-                    f"SELECT {', '.join(C.WISH_COLS)} FROM wishes{where} "
+                    f"SELECT {', '.join(C.WISH_COLS)}, seq FROM wishes{where} "
                     "ORDER BY pulled_at ASC, seq ASC, id ASC", args)]
                 try:
                     rewards = [dict(r) for r in src.execute(
-                        f"SELECT {', '.join(C.REWARD_COLS)} FROM rewards{where} "
+                        f"SELECT {', '.join(C.REWARD_COLS)}, seq FROM rewards{where} "
                         "ORDER BY obtained_at ASC, seq ASC, id ASC", args)]
                 except sqlite3.Error:
                     rewards = []
-                valid, errors = C.normalize_all(wishes, C.normalize_record, "запись")
-                valid_rw, errors_rw = C.normalize_all(rewards, C.normalize_reward, "предмет")
+                valid, errors = self._normalize_keep_seq(wishes, C.normalize_record, "запись")
+                valid_rw, errors_rw = self._normalize_keep_seq(rewards, C.normalize_reward, "предмет")
+                all_errors += errors + errors_rw
                 if valid or valid_rw:
                     out.append({"name": pr["name"], "valid": valid, "valid_rw": valid_rw,
                                 "errors": errors + errors_rw})
         finally:
             src.close()
-        return {"kind": "db", "profiles": out,
+        return {"kind": "db", "profiles": out, "has_seq": True,
                 "valid": sum(len(x["valid"]) for x in out), "valid_rw": sum(len(x["valid_rw"]) for x in out),
-                "errors": [e for x in out for e in x["errors"]]}
+                "errors": all_errors}
 
     def apply_import(self, data: dict, into_current: bool = True) -> str:
         """Записывает проверенные данные; дубликаты (то же название и время) пропускаются."""
         def put(valid, valid_rw):
+            if any("seq" in r for r in valid + valid_rw):
+                # порядок внутри одной секунды (seq) сохраняется точно как на ПК
+                new_w = C.Database._new_only(valid, self.db.fetch_all(), C._wish_key)          # noqa: SLF001
+                new_r = C.Database._new_only(valid_rw, self.db.fetch_rewards(), C._reward_key)  # noqa: SLF001
+                a, ar = self.db.import_batch(new_w, new_r)
+                return a, len(valid) - a, ar, len(valid_rw) - ar
             a, sk = self.db.import_records(valid) if valid else (0, 0)
             ar, skr = self.db.import_rewards(valid_rw) if valid_rw else (0, 0)
             return a, sk, ar, skr

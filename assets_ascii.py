@@ -51,8 +51,43 @@ def _lookup(folders, variants):
     return None
 
 
+_TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s",
+                "t", "u", "f", "h", "ts", "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"]))
+
+
+def translit(text: str) -> str:
+    """Хотори -> hotori: на случай, если иконки лежат под латинскими именами."""
+    return "".join(_TR.get(ch, ch) for ch in norm(text))
+
+
 def search_icon(name: str):
-    return _lookup(C.asset_dirs(), C._name_variants(name))          # noqa: SLF001
+    """Сначала русские имена (в том числе u_<hex>), затем латиница: Хотори -> hotori / Hotori."""
+    variants = list(C._name_variants(name))                          # noqa: SLF001
+    found = _lookup(C.asset_dirs(), variants)
+    if found is None:
+        extra = []
+        for v in variants:
+            t = translit(v)
+            extra += [t, t.replace(" ", "_"), t.replace(" ", "-"), t.replace(" ", "")]
+        found = _lookup(C.asset_dirs(), extra)
+    return found
+
+
+def describe() -> str:
+    """Что реально лежит в assets/ на устройстве (для диагностики)."""
+    lines = []
+    for folder in C.asset_dirs():
+        if not folder.is_dir():
+            continue
+        try:
+            files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in C.ICON_EXTS)
+        except OSError as e:
+            lines.append(f"{folder}: не читается ({e})")
+            continue
+        sample = ", ".join(decode_stem(p.stem) for p in files[:4])
+        lines.append(f"{folder.name}/: {len(files)} шт. {('— ' + sample) if sample else ''}")
+    return "\n".join(lines) or "Папка assets/ с иконками на устройстве не найдена."
 
 
 def find_art(variants: list):

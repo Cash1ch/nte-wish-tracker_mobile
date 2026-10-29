@@ -42,7 +42,7 @@ import platform_android as P                                                # no
 import services as S                                                        # noqa: E402
 from share_card import render_share_card
 from services import RANK_HEX, pity_hex
-from widgets import BackgroundLayer, BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
+from widgets import WelcomeOverlay, BackgroundLayer, BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
 
 RANK_COLOR = {5: "ffd740", 4: "d6a0e0", 3: "90caf9"}        # S золотой, A фиолетовый, B синий
 MUTED = "9a9eb0"
@@ -108,6 +108,7 @@ class NteApp(App):
     # ------------------------------------------------------------------ запуск
     def build(self):
         Window.clearcolor = (0.05, 0.06, 0.11, 1)
+        Window.softinput_mode = "below_target"       # клавиатура не закрывает поле ввода
         C._DATA_DIR = str(P.user_data_dir())
         import assets_ascii                           # иконки с русскими именами (u_<hex>.png)
         assets_ascii.install()
@@ -139,15 +140,16 @@ class NteApp(App):
             nav.add_widget(btn)
         root.add_widget(nav)
         self.show("staff")
+        from kivy.uix.floatlayout import FloatLayout
+        outer = FloatLayout()
         bg = S.Tracker.find_background()
         if bg:                                        # фон: assets/background.* (размытый) + затемнение
             bg = S.Tracker.blurred_background(bg, P.cache_dir())
-            from kivy.uix.floatlayout import FloatLayout
-            outer = FloatLayout()
             outer.add_widget(BackgroundLayer(bg, size_hint=(1, 1), pos_hint={"x": 0, "y": 0}))
-            root.size_hint, root.pos_hint = (1, 1), {"x": 0, "y": 0}
-            outer.add_widget(root)
-            root = outer
+        root.size_hint, root.pos_hint = (1, 1), {"x": 0, "y": 0}
+        outer.add_widget(root)
+        self.outer = outer
+        root = outer
         Window.bind(on_keyboard=self._on_key)
         Clock.schedule_interval(self._tick, 1)
         Clock.schedule_once(lambda _dt: self._startup(), 0.2)
@@ -246,12 +248,24 @@ class NteApp(App):
         pop.open()
 
     def _ask_nickname(self):
-        def create(name):
-            self.t.create_profile(name)
-            self.music.db = self.t.db
+        """Красивое стартовое окно вместо обычного диалога."""
+        def start(nick, then=None):
+            name = (nick or "").strip()
+            if not name:
+                return self.welcome.show_error("Введите никнейм.")
+            try:
+                self.t.create_profile(name)
+            except Exception as e:  # noqa: BLE001 — DatabaseError с понятным русским текстом
+                return self.welcome.show_error(str(e))
+            self.outer.remove_widget(self.welcome)
+            self.welcome = None
             self.refresh_all()
             self.load_banners()
-        self.prompt("Первый запуск", "Введите ваш никнейм", create, modal=True)
+            if then:
+                then()
+        self.welcome = WelcomeOverlay(on_start=start,
+                                      on_import=lambda nick: start(nick, then=self._import_json))
+        self.outer.add_widget(self.welcome)
 
     # ------------------------------------------------------------------ баннеры
     def load_banners(self):
@@ -700,6 +714,7 @@ class NteApp(App):
         for text, fn in (("Поделиться статистикой (картинка)", self._share_card),
                          ("Экспорт JSON", self._export_json),
                          ("Импорт истории с ПК (JSON / CSV / .db)", self._import_json),
+                         ("Диагностика (иконки, OCR, баннеры)", self._diagnostics),
                          ("Резервная копия базы", self._backup),
                          ("Восстановить из копии", self._restore)):
             b = GBtn(text=text)
@@ -762,6 +777,10 @@ class NteApp(App):
                         ", ".join(f"«{p['name']}»" for p in data["profiles"])
             elif data["has_rewards"]:
                 text += f"\nНайдено предметов: {len(data['valid_rw'])}"
+            if data["kind"] == "file" and not data.get("has_seq"):
+                text += ("\n\n⚠ В этом файле нет порядка записей внутри одной секунды (десять круток падают "
+                         "одновременно), поэтому цифры гаранта у отдельных S могут отличаться от ПК на "
+                         "несколько круток. Для точного совпадения импортируйте файл базы nte_wishes.db.")
             if data["errors"]:
                 text += f"\nПропущено с ошибками: {len(data['errors'])}\n" + "\n".join(data["errors"][:4])
 
@@ -782,6 +801,23 @@ class NteApp(App):
                 self.ask("Импорт", text + "\n\nИмпортировать? Дубликаты будут пропущены.",
                          lambda: run(True))
         P.pick_images(done, multiple=False, mime="*/*")
+
+    def _diagnostics(self):
+        import assets_ascii
+        import platform_android as PA
+        lines = [f"Иконки и арт:\n{assets_ascii.describe()}"]
+        bg = S.Tracker.find_background()
+        lines.append(f"\nФон: {'найден' if bg else 'нет файла assets/background.*'}")
+        for nm in ("Хотори", "EXE", "Блэкбёрд"):
+            ic = self.t.icon(nm, (), 5)
+            lines.append(f"Иконка «{nm}»: {'найдена' if ic else 'НЕ найдена'}")
+        try:
+            td = sorted(f.name for f in (PA.user_data_dir() / "tessdata").glob("*.traineddata"))
+        except Exception:  # noqa: BLE001
+            td = []
+        lines.append(f"\nЯзыки OCR: {', '.join(td) or 'нет'}; готов: {'да' if self.ocr_ready else 'нет'}")
+        lines.append(f"Баннеры: {'загружены' if self.t.banner_info else 'нет (' + (self.t.last_banner_error or 'ещё не запрашивались') + ')'}")
+        self.msg("Диагностика", "\n".join(lines))
 
     def _backup(self):
         out = str(P.cache_dir() / "nte_wishes_backup.db")
