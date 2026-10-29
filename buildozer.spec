@@ -28,7 +28,8 @@ android.enable_androidx = True
 
 # Tesseract4Android (Tesseract 5.x + Leptonica, rus/eng берутся из tessdata/ в APK).
 # Версию сверьте на https://github.com/adaptech-cz/Tesseract4Android
-android.add_aars = libs/tesseract4android-4.9.0.aar
+android.gradle_dependencies = cz.adaptech.tesseract4android:tesseract4android:4.9.0
+android.add_gradle_repositories = "maven { url 'https://jitpack.io' }"
 
 # bundle: icons -> assets/icons, music -> assets/audio/bgm.mp3, tessdata/*.traineddata
 presplash.color = #0d0f1d
