@@ -4,6 +4,10 @@
 tools/asciify_assets.py переименовывает их в u_<hex>.png (hex = UTF-8 имени без расширения).
 Здесь поиск иконок и арта в nte_core учится декодировать такие имена обратно, так что
 остальной код (find_icon_path, баннеры) работает без изменений. Обычные имена тоже находятся."""
+import hashlib
+import os
+import shutil
+import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -12,7 +16,40 @@ import nte_core as C
 _INDEX = {}
 
 
+def fixed_stem(stem: str) -> str:
+    """Имя файла в нормальном виде. На некоторых Android Python читает кириллические имена как
+    последовательность «суррогатов» (по одному на байт UTF-8); возвращаем исходные байты и
+    декодируем их как UTF-8."""
+    try:
+        raw = os.fsencode(stem)
+    except UnicodeEncodeError:
+        raw = stem.encode("utf-8", "surrogateescape")
+    return raw.decode("utf-8", "replace")
+
+
+def _cache_dir() -> Path:
+    base = getattr(C, "_DATA_DIR", None)
+    d = (Path(base) if base else Path(tempfile.gettempdir())) / "assets_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_path(p: Path) -> Path:
+    """Kivy/SDL не умеют открывать пути с суррогатами. Для таких файлов делаем ASCII-копию в кэше."""
+    if str(p).isascii():
+        return p
+    try:
+        key = hashlib.md5(os.fsencode(str(p))).hexdigest()
+        dst = _cache_dir() / f"{key}{p.suffix.lower()}"
+        if not dst.is_file() or dst.stat().st_size != p.stat().st_size:
+            shutil.copyfile(p, dst)
+        return dst
+    except OSError:
+        return p
+
+
 def decode_stem(stem: str) -> str:
+    stem = fixed_stem(stem)
     if stem.startswith("u_"):
         try:
             return bytes.fromhex(stem[2:]).decode("utf-8")
@@ -32,7 +69,7 @@ def _dir_index(folder: Path) -> dict:
         try:
             for p in sorted(folder.iterdir()):
                 if p.is_file() and p.suffix.lower() in C.ICON_EXTS:
-                    idx.setdefault(norm(decode_stem(p.stem)), p)
+                    idx.setdefault(norm(decode_stem(p.stem)), _safe_path(p))
         except OSError:
             pass
         _INDEX[key] = idx
