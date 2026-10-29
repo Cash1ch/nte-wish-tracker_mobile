@@ -65,14 +65,46 @@ def request_permissions(callback=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Время создания: десктопный конвейер упорядочивает снимки по mass_sort_key (дата файла),
-# а копия из галереи получает «сегодняшнюю» дату. Возвращаем исходную.
+# Выбор файлов (системный SAF-диалог) и камера — своя реализация на pyjnius, без сторонних
+# библиотек: ошибки не глотаются, а показываются окном и пишутся в logcat (тег python).
 # ---------------------------------------------------------------------------
-def _uri_last_modified_ms(uri) -> int:
+def _show_error(text: str) -> None:
+    print("NTE picker error:", text)
     try:
-        from jnius import autoclass                                           # type: ignore
-        activity = autoclass("org.kivy.android.PythonActivity").mActivity
-        cur = activity.getContentResolver().query(uri, None, None, None, None)
+        from kivy.clock import Clock
+        from kivy.metrics import dp
+        from kivy.uix.label import Label
+        from kivy.uix.popup import Popup
+
+        def show(_dt):
+            lbl = Label(text=text, halign="left", valign="top")
+            lbl.bind(size=lambda w, s: setattr(w, "text_size", (s[0] - dp(12), None)))
+            Popup(title="Выбор файла", content=lbl, size_hint=(0.92, 0.5)).open()
+        Clock.schedule_once(show, 0)
+    except Exception:
+        pass
+
+
+def _display_name(resolver, uri) -> str:
+    try:
+        cur = resolver.query(uri, None, None, None, None)
+        if cur is not None:
+            try:
+                idx = cur.getColumnIndex("_display_name")
+                if idx >= 0 and cur.moveToFirst():
+                    return cur.getString(idx) or ""
+            finally:
+                cur.close()
+    except Exception:
+        pass
+    return ""
+
+
+def _uri_last_modified_ms(resolver, uri) -> int:
+    """Время создания: конвейер упорядочивает снимки по дате файла, а копия из галереи
+    получает «сегодняшнюю» дату. Возвращаем исходную."""
+    try:
+        cur = resolver.query(uri, None, None, None, None)
         if cur is None:
             return 0
         try:
@@ -80,7 +112,8 @@ def _uri_last_modified_ms(uri) -> int:
                 idx = cur.getColumnIndex(col)
                 if idx >= 0 and cur.moveToFirst():
                     v = cur.getLong(idx)
-                    return v * 1000 if col == "date_added" else v
+                    if v:
+                        return v * 1000 if col == "date_added" else v
         finally:
             cur.close()
     except Exception:
@@ -88,47 +121,104 @@ def _uri_last_modified_ms(uri) -> int:
     return 0
 
 
-def _import_uris(uris) -> list:
-    """content:// -> файлы в cache_dir() с сохранением даты. Возвращает список путей."""
-    from androidstorage4kivy import SharedStorage                             # type: ignore
-    storage, out = SharedStorage(), []
-    for uri in uris or []:
-        try:
-            path = storage.copy_from_shared(uri)          # uri — объект android.net.Uri
-        except Exception:
-            continue
-        if not path:
-            continue
-        dst = cache_dir() / f"{int(time.time() * 1000)}_{Path(path).name}"
-        shutil.move(path, dst)
-        ms = _uri_last_modified_ms(uri)
-        if ms:
-            os.utime(dst, (ms / 1000, ms / 1000))
-        out.append(str(dst))
-    return out
+def _copy_uri(uri) -> str:
+    """content:// -> файл в cache_dir() с сохранением даты. Бросает исключение при сбое."""
+    from jnius import autoclass                                               # type: ignore
+    act = autoclass("org.kivy.android.PythonActivity").mActivity
+    FileOutputStream = autoclass("java.io.FileOutputStream")
+    FileUtils = autoclass("android.os.FileUtils")                             # API 29+
+    resolver = act.getContentResolver()
+    name = _display_name(resolver, uri) or "shot.png"
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
+    dst = cache_dir() / f"{int(time.time() * 1000)}_{safe}"
+    ins = resolver.openInputStream(uri)
+    if ins is None:
+        raise OSError("не удалось открыть файл: " + str(uri.toString()))
+    outs = FileOutputStream(str(dst))
+    try:
+        FileUtils.copy(ins, outs)
+    finally:
+        ins.close()
+        outs.close()
+    ms = _uri_last_modified_ms(resolver, uri)
+    if ms:
+        os.utime(dst, (ms / 1000, ms / 1000))
+    return str(dst)
+
+
+def _uris_from_intent(intent) -> list:
+    uris = []
+    clip = intent.getClipData()
+    if clip is not None:
+        for i in range(clip.getItemCount()):
+            uris.append(clip.getItemAt(i).getUri())
+    else:
+        data = intent.getData()
+        if data is not None:
+            uris.append(data)
+    return uris
+
+
+def _finish(callback, uris) -> None:
+    """Копирование в фоне, результат — в главный поток Kivy."""
+    import threading
+    from kivy.clock import Clock
+
+    def work():
+        paths, errors = [], []
+        for u in uris:
+            try:
+                paths.append(_copy_uri(u))
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{type(e).__name__}: {e}")
+        if errors:
+            _show_error("Не удалось прочитать файлы:\n" + "\n".join(errors[:3]))
+        Clock.schedule_once(lambda _dt: callback(paths), 0)
+    threading.Thread(target=work, daemon=True).start()
 
 
 def pick_images(callback, multiple: bool = True, mime: str = "image/*") -> None:
-    """Системный выбор файлов (SAF, без разрешений на всё хранилище). callback(list[str])."""
+    """Системный выбор файлов (ACTION_OPEN_DOCUMENT, разрешения на хранилище не нужны).
+    callback(list[str]) вызывается в главном потоке; при отмене — с пустым списком."""
     if not ON_ANDROID:
         paths = [p for p in os.environ.get("NTE_TEST_IMAGES", "").split(os.pathsep) if p]
         callback(paths)
         return
-    from androidstorage4kivy import Chooser                                   # type: ignore
+    from android import activity                                              # type: ignore
+    from jnius import autoclass                                               # type: ignore
     from kivy.clock import Clock
+    Intent = autoclass("android.content.Intent")
+    act = autoclass("org.kivy.android.PythonActivity").mActivity
+    code = 7302
 
-    def done(uris):
-        paths = _import_uris(uris) if mime.startswith("image") else _import_plain(uris)
-        Clock.schedule_once(lambda _dt: callback(paths), 0)
-    Chooser(done).choose_content(mime, multiple=multiple)
+    def on_result(request, result, intent):
+        if request != code:
+            return
+        activity.unbind(on_activity_result=on_result)
+        try:
+            if result != -1 or intent is None:               # отмена
+                Clock.schedule_once(lambda _dt: callback([]), 0)
+                return
+            _finish(callback, _uris_from_intent(intent))
+        except Exception as e:  # noqa: BLE001
+            _show_error(f"{type(e).__name__}: {e}")
+            Clock.schedule_once(lambda _dt: callback([]), 0)
 
-
-def _import_plain(uris) -> list:
-    return _import_uris(uris)
+    activity.bind(on_activity_result=on_result)
+    try:
+        intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType(mime)
+        if multiple:
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+        act.startActivityForResult(intent, code)
+    except Exception as e:  # noqa: BLE001
+        activity.unbind(on_activity_result=on_result)
+        _show_error(f"Не удалось открыть выбор файлов:\n{type(e).__name__}: {e}")
 
 
 def take_photo(callback) -> None:
-    """Камера: снимок сохраняется в MediaStore (Pictures/NTE) без FileProvider; затем копируется
+    """Камера: снимок пишется в MediaStore (Pictures/NTE) без FileProvider, затем копируется
     в cache_dir(). callback(list[str])."""
     if not ON_ANDROID:
         callback([])
@@ -139,26 +229,36 @@ def take_photo(callback) -> None:
     Intent = autoclass("android.content.Intent")
     MediaStore = autoclass("android.provider.MediaStore")
     ContentValues = autoclass("android.content.ContentValues")
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    act = PythonActivity.mActivity
-    values = ContentValues()
-    values.put("_display_name", f"nte_{int(time.time())}.jpg")
-    values.put("mime_type", "image/jpeg")
-    values.put("relative_path", "Pictures/NTE")
-    uri = act.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    act = autoclass("org.kivy.android.PythonActivity").mActivity
     code = 7301
+    try:
+        values = ContentValues()
+        values.put("_display_name", f"nte_{int(time.time())}.jpg")
+        values.put("mime_type", "image/jpeg")
+        values.put("relative_path", "Pictures/NTE")
+        uri = act.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    except Exception as e:  # noqa: BLE001
+        _show_error(f"Камера недоступна:\n{type(e).__name__}: {e}")
+        callback([])
+        return
 
     def on_result(request, result, _intent):
         if request != code:
             return
         activity.unbind(on_activity_result=on_result)
-        paths = _import_uris([uri]) if result == -1 else []
-        Clock.schedule_once(lambda _dt: callback(paths), 0)
+        if result == -1:
+            _finish(callback, [uri])
+        else:
+            Clock.schedule_once(lambda _dt: callback([]), 0)
 
     activity.bind(on_activity_result=on_result)
-    intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-    intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
-    act.startActivityForResult(intent, code)
+    try:
+        intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        act.startActivityForResult(intent, code)
+    except Exception as e:  # noqa: BLE001
+        activity.unbind(on_activity_result=on_result)
+        _show_error(f"Не удалось открыть камеру:\n{type(e).__name__}: {e}")
 
 
 def share_file(path: str, title: str = "Поделиться") -> None:
