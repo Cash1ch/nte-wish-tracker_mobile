@@ -24,13 +24,11 @@ from kivy.metrics import dp                                                 # no
 from kivy.properties import BooleanProperty, ListProperty, NumericProperty, ObjectProperty, StringProperty  # noqa: E402,E501
 from kivy.resources import resource_find                                    # noqa: E402
 from kivy.uix.boxlayout import BoxLayout                                    # noqa: E402
+from kivy.uix.checkbox import CheckBox                                      # noqa: E402
 from kivy.uix.button import Button                                          # noqa: E402
 from kivy.uix.label import Label                                            # noqa: E402
 from kivy.uix.popup import Popup                                            # noqa: E402
-from kivy.uix.progressbar import ProgressBar                                # noqa: E402
-from kivy.uix.recycleboxlayout import RecycleBoxLayout                      # noqa: E402
-from kivy.uix.recycleview import RecycleView                                # noqa: E402
-from kivy.uix.recycleview.views import RecycleDataViewBehavior              # noqa: E402
+from kivy.uix.progressbar import ProgressBar                                # noqa: E402,F401
 from kivy.uix.scrollview import ScrollView                                  # noqa: E402
 from kivy.uix.slider import Slider                                          # noqa: E402
 from kivy.uix.spinner import Spinner                                        # noqa: E402
@@ -42,121 +40,15 @@ import nte_core as C                                                        # no
 import ocr_android                                                          # noqa: E402
 import platform_android as P                                                # noqa: E402
 import services as S                                                        # noqa: E402
-from share_card import render_share_card                                    # noqa: E402
+from share_card import render_share_card
+from services import RANK_HEX, pity_hex
+from widgets import BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
 
 RANK_COLOR = {5: "ffd740", 4: "d6a0e0", 3: "90caf9"}        # S золотой, A фиолетовый, B синий
 MUTED = "9a9eb0"
 POOLS = [(C.EVENT_BANNER, "Ивентовые персонажи"), (C.STANDARD_BANNER, "Стандартные персонажи"),
          (C.ARC_BANNER, "Дуги")]
 POOL_BY_TITLE = {t: k for k, t in POOLS}
-
-KV = """
-#:import dp kivy.metrics.dp
-<Glass>:
-    orientation: 'vertical'
-    padding: dp(12)
-    spacing: dp(6)
-    size_hint_y: None
-    height: self.minimum_height
-    canvas.before:
-        Color:
-            rgba: 1, 1, 1, 0.07
-        RoundedRectangle:
-            pos: self.pos
-            size: self.size
-            radius: [dp(14)]
-        Color:
-            rgba: 1, 1, 1, 0.16
-        Line:
-            rounded_rectangle: (self.x, self.y, self.width, self.height, dp(14))
-            width: 1
-<GBtn>:
-    background_normal: ''
-    background_color: 1, 1, 1, 0.14
-    color: 0.93, 0.93, 0.96, 1
-    size_hint_y: None
-    height: dp(46)
-<ResRow>:
-    orientation: 'horizontal'
-    size_hint_y: None
-    height: dp(58)
-    spacing: dp(6)
-    CheckBox:
-        size_hint_x: None
-        width: dp(44)
-        active: root.checked
-        on_active: root.on_check(self.active)
-    Button:
-        text: root.text
-        markup: True
-        halign: 'left'
-        valign: 'middle'
-        text_size: (self.width - dp(12), self.height)
-        background_normal: ''
-        background_color: root.bg
-        on_release: root.on_edit()
-<HistRow>:
-    background_normal: ''
-    background_color: 1, 1, 1, 0.05
-    markup: True
-    halign: 'left'
-    valign: 'middle'
-    text_size: (self.width - dp(12), self.height)
-"""
-
-
-class Glass(BoxLayout):
-    """Карточка в стиле «стекло»: полупрозрачная заливка, скругление, светлая рамка."""
-
-
-class GBtn(Button):
-    pass
-
-
-class WLabel(Label):
-    """Переносимая по ширине подпись с авто-высотой."""
-    def __init__(self, **kw):
-        kw.setdefault("size_hint_y", None)
-        kw.setdefault("markup", True)
-        kw.setdefault("halign", "left")
-        super().__init__(**kw)
-        self.bind(width=lambda *_: setattr(self, "text_size", (self.width, None)))
-        self.bind(texture_size=lambda *_: setattr(self, "height", self.texture_size[1] + dp(4)))
-
-
-class HistRow(Button):
-    entry = ObjectProperty(None, allownone=True)
-
-    def on_release(self):
-        App.get_running_app().open_history_entry(self.entry)
-
-
-class ResRow(RecycleDataViewBehavior, BoxLayout):
-    index = NumericProperty(0)
-    text = StringProperty("")
-    checked = BooleanProperty(True)
-    bg = ListProperty([1, 1, 1, 0.06])
-
-    def on_check(self, active):
-        App.get_running_app().scan_toggle(self.index, active)
-
-    def on_edit(self):
-        App.get_running_app().scan_edit(self.index)
-
-    def refresh_view_attrs(self, rv, index, data):
-        self.index = index
-        return super().refresh_view_attrs(rv, index, data)
-
-
-def make_rv(viewclass: str, item_height: float) -> RecycleView:
-    rv = RecycleView()
-    rv.viewclass = viewclass
-    layout = RecycleBoxLayout(default_size=(None, dp(item_height)), default_size_hint=(1, None),
-                              size_hint_y=None, orientation="vertical", spacing=dp(4))
-    layout.bind(minimum_height=layout.setter("height"))
-    rv.add_widget(layout)
-    return rv
-
 
 def column() -> BoxLayout:
     return BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10), padding=dp(10))
@@ -167,17 +59,6 @@ def scrolled(content: BoxLayout) -> ScrollView:
     sv = ScrollView(do_scroll_x=False)
     sv.add_widget(content)
     return sv
-
-
-def pity_hex(value: int, hard: int) -> str:
-    """Цвет гаранта: зелёный -> красный (замена pity_color, которая зависела от QColor)."""
-    k = max(0.0, min(1.0, value / float(hard or 1)))
-    return "%02x%02x%02x" % (int(80 + 175 * k), int(220 - 150 * k), 90)
-
-
-def bar(value, maximum, color="ffd740"):
-    pb = ProgressBar(max=maximum, value=min(value, maximum), size_hint_y=None, height=dp(10))
-    return pb
 
 
 class Music:
@@ -227,7 +108,6 @@ class NteApp(App):
     # ------------------------------------------------------------------ запуск
     def build(self):
         Window.clearcolor = (0.05, 0.06, 0.11, 1)
-        Builder.load_string(KV)
         C._DATA_DIR = str(P.user_data_dir())
         self.t = S.Tracker(P.user_data_dir() / C.DB_NAME)
         self.music = Music(self.t.db)
@@ -386,12 +266,21 @@ class NteApp(App):
     # ------------------------------------------------------------------ «Стафф»
     def _build_staff(self):
         box = BoxLayout(orientation="vertical")
-        self.pool_spin = Spinner(text=POOLS[0][1], values=[t for _k, t in POOLS],
-                                 size_hint_y=None, height=dp(46))
-        self.pool_spin.bind(text=lambda _s, v: self._set_pool(POOL_BY_TITLE[v]))
-        self.nick_lbl = Label(text="", size_hint_y=None, height=dp(30), color=(1, 0.84, 0.25, 1))
+        self.nick_lbl = Label(text="", size_hint_y=None, height=dp(34), bold=True,
+                              color=(1, 0.88, 0.5, 1), font_size=dp(15))
         box.add_widget(self.nick_lbl)
-        box.add_widget(self.pool_spin)
+        tabs = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(4), padding=(dp(6), 0))
+        self.pool_tabs = {}
+        for key, title in POOLS:
+            b = ToggleButton(text=title, group="pool", allow_no_selection=False, font_size=dp(12),
+                             background_normal="", background_down="",
+                             background_color=(1, 1, 1, 0.10), halign="center",
+                             state="down" if key == self.pool else "normal")
+            b.bind(width=lambda w, v: setattr(w, "text_size", (v - dp(8), None)))
+            b.bind(on_release=lambda _b, k=key: self._set_pool(k))
+            self.pool_tabs[key] = b
+            tabs.add_widget(b)
+        box.add_widget(tabs)
         self.staff_col = column()
         box.add_widget(scrolled(self.staff_col))
         return box
@@ -404,67 +293,72 @@ class NteApp(App):
         if not self.t.has_profile:
             return
         prof = self.t.db.active_profile() or {"name": ""}
-        self.nick_lbl.text = prof["name"]
+        self.nick_lbl.text = f"Профиль: {prof['name']}"
+        for key, b in self.pool_tabs.items():
+            b.state = "down" if key == self.pool else "normal"
         col = self.staff_col
         col.clear_widgets()
         self.countdowns = []
-        s = self.t.pool_summary(self.pool)
+        pool = self.pool
+        s = self.t.pool_summary(pool)
+        is_arc = pool == C.ARC_BANNER
+        hide_std = False
+        if is_arc:
+            hide_std = self.t.db.get_setting("arc_hide_standard", "0", scoped=True) == "1"
 
-        stats = BoxLayout(size_hint_y=None, height=dp(86), spacing=dp(8))
-        for title, value in (("Всего круток", s["total"]), ("Всего S", s["s"]),
-                             ("Средний гарант (S)", s["avg_pity"] or "—")):
+        total_s, avg = s["s"], (s["avg_pity"] or "—")
+        if is_arc and hide_std:
+            total_s, avg = C.arc_event_only_stats(self.t.history)
+
+        stats = BoxLayout(size_hint_y=None, height=dp(92), spacing=dp(8))
+        for title, value in (("Всего круток", s["total"]), ("Всего S", total_s),
+                             ("Средний гарант (S)", avg)):
             card = Glass()
-            card.add_widget(WLabel(text=f"[color={MUTED}]{title}[/color]", font_size=dp(11)))
-            card.add_widget(WLabel(text=f"[b][color={RANK_COLOR[5]}]{value}[/color][/b]", font_size=dp(22)))
+            card.add_widget(WLabel(text=f"[color={MUTED}]{title}[/color]", font_size=dp(11), halign="center"))
+            card.add_widget(WLabel(text=f"[b][color={RANK_COLOR[5]}]{value}[/color][/b]",
+                                   font_size=dp(24), halign="center"))
             stats.add_widget(card)
         col.add_widget(stats)
 
-        cards = self.t.banner_cards()
-        shown = {C.EVENT_BANNER: cards[0:2], C.ARC_BANNER: cards[2:4], C.STANDARD_BANNER: []}[self.pool]
-        for c in shown:
-            col.add_widget(self._banner_card(c))
-        offline = all(c["kind"] == "none" for c in shown)       # banners.json недоступен — счётчики пула
-        if self.pool == C.ARC_BANNER:
-            if offline:
-                col.add_widget(self._pity_card("Стандартная S дуга", s["counter_std"], C.PITY_ARC_STD))
-                col.add_widget(self._pity_card("Ивентовая S дуга", s["counter_ev"], C.PITY_ARC_EVENT))
-        else:
-            title = "Ивентовый S персонаж" if self.pool == C.EVENT_BANNER else "Стандартный S персонаж"
-            if offline or self.pool == C.STANDARD_BANNER:
-                col.add_widget(self._pity_card(title, s["counter"], C.PITY_CHAR_HARD, soft=C.PITY_CHAR_SOFT))
+        chips = [(k, C.CUBE_TITLES[k]) for k in C.POOL_CUBES.get(pool, ()) if k != "cube" or s["qty"].get("cube")]
+        if chips:
+            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+            for kind, title in chips:
+                chip = Glass(orientation="horizontal", padding=(dp(10), dp(6)))
+                chip.add_widget(WLabel(text=f"{title}: [b]{s['qty'].get(kind, 0)}[/b] шт.", font_size=dp(13)))
+                row.add_widget(chip)
+            col.add_widget(row)
+
+        cards = self.t.banner_cards(pool, datetime.now())
+        for c in cards:
+            card = BannerCard(c)
+            col.add_widget(card)
+            if c.get("entry"):
+                self.countdowns.append((card.timer, c["entry"]))
+        if pool == C.EVENT_BANNER and not self.t.banner_info and self.t.last_banner_error:
+            col.add_widget(WLabel(text=f"[color={MUTED}]banners.json не загружен: "
+                                       f"{self.t.last_banner_error}[/color]", font_size=dp(10)))
+        if pool == C.STANDARD_BANNER:
+            g = Glass()
+            g.add_widget(WLabel(text=f"Стандартный S персонаж: [b][color={pity_hex(s['counter'], C.PITY_CHAR_HARD)}]"
+                                     f"{s['counter']}/{C.PITY_CHAR_HARD}[/color][/b]  (мягкий {C.PITY_CHAR_SOFT})"))
+            g.add_widget(bar(s["counter"], C.PITY_CHAR_HARD))
+            col.add_widget(g)
+
+        extra = None
+        if is_arc:
+            extra = BoxLayout(size_hint_y=None, height=dp(40))
+            extra.add_widget(WLabel(text="Скрыть стандартные дуги"))
+            sw = Switch(active=hide_std, size_hint_x=None, width=dp(70))
+            sw.bind(active=lambda _s, v: (self.t.db.set_setting("arc_hide_standard", "1" if v else "0",
+                                                                scoped=True), self.refresh_staff()))
+            extra.add_widget(sw)
+        empty = "Пока не выпала ни одна дуга S ранга." if is_arc else "Пока не выпал ни один персонаж S ранга."
+        col.add_widget(Group("История выпадения S", self.t.drops(pool, hide_std), empty, extra))
+        for g in self.t.rosters(pool):
+            col.add_widget(Group(g["title"], g["tiles"]))
         col.add_widget(WLabel(text=f"[color={MUTED}]A: {s['a']}   B: {s['b']}   "
-                                   f"Бонусная добыча: {s['bonus']}[/color]"))
-
-    def _pity_card(self, title, value, maximum, soft=None):
-        g = Glass()
-        extra = f"  (мягкий {soft})" if soft else ""
-        g.add_widget(WLabel(text=f"{title}: [b][color={pity_hex(value, maximum)}]{value}/{maximum}[/color][/b]{extra}"))
-        g.add_widget(bar(value, maximum))
-        return g
-
-    def _banner_card(self, c):
-        g = Glass()
-        g.add_widget(WLabel(text=f"[color={MUTED}]{c['title']}[/color]", font_size=dp(12)))
-        g.add_widget(WLabel(text=f"[b]{c['name']}[/b]", font_size=dp(18)))
-        timer = WLabel(text=c["countdown"], font_size=dp(13), color=(0.56, 0.79, 0.98, 1))
-        g.add_widget(timer)
-        if c.get("entry"):
-            self.countdowns.append((timer, c["entry"]))
-        if c["name"] in ("Не определён", "Не объявлена"):
-            return g
-        g.add_widget(WLabel(text=f"Круток за период: [b]{c['pulls']}[/b]   из них S: [b]{c['s']}[/b]"))
-        if "pity" in c:
-            g.add_widget(self._inline_pity("До гаранта", c["pity"], C.PITY_CHAR_HARD))
-        else:
-            g.add_widget(self._inline_pity("Стандартная S дуга", c["std"], C.PITY_ARC_STD))
-            g.add_widget(self._inline_pity("Ивентовая S дуга", c["ev"], C.PITY_ARC_EVENT))
-        return g
-
-    def _inline_pity(self, label, value, maximum):
-        box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(44))
-        box.add_widget(WLabel(text=f"{label}: [b][color={pity_hex(value, maximum)}]{value}/{maximum}[/color][/b]"))
-        box.add_widget(bar(value, maximum))
-        return box
+                                   f"Бонусная добыча: {s['bonus']}[/color]", font_size=dp(11)))
 
     # ------------------------------------------------------------------ «История»
     def _build_history(self):
@@ -473,24 +367,38 @@ class NteApp(App):
                                    size_hint_y=None, height=dp(44))
         self.hist_filter.bind(text=lambda *_: self.refresh_history())
         box.add_widget(self.hist_filter)
-        self.hist_rv = make_rv("HistRow", 56)
-        box.add_widget(self.hist_rv)
+        self.hist_count = WLabel(text="", font_size=dp(11))
+        box.add_widget(self.hist_count)
+        self.hist_list = PagedList(page=40)
+        box.add_widget(scrolled(self.hist_list))
         return box
 
     def refresh_history(self):
-        flt = self.hist_filter.text
-        key = POOL_BY_TITLE.get(flt)
-        data = []
-        for e in self.t.history:
-            if key and e["banner"] != key:
-                continue
-            col = RANK_COLOR.get(e["rarity"], RANK_COLOR[3])
-            letter = C.rank_letter(e["rarity"])
-            data.append({"entry": e, "text": (
-                f"[b][color={col}]{letter}[/color][/b]  {e['name']}   "
-                f"[size=12sp][color={MUTED}]{e['type']}[/color][/size]\n"
-                f"[size=12sp][color={MUTED}]{e['date']} · № {e['n']} · гарант {e['pity']}[/color][/size]")})
-        self.hist_rv.data = data
+        key = POOL_BY_TITLE.get(self.hist_filter.text)
+        items = [e for e in self.t.history if not key or e["banner"] == key]
+        self.hist_count.text = f"[color={MUTED}]Записей: {len(items)}[/color]"
+        self.hist_list.set_items(items, self._history_row, "В этом пуле пока нет записей.")
+
+    def _history_row(self, _i, e):
+        row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8), padding=(dp(4), dp(2)))
+        icon = self.t.icon(e["name"], e.get("aliases") or (), e["rarity"])
+        if icon:
+            from kivy.uix.image import Image
+            row.add_widget(Image(source=icon, size_hint_x=None, width=dp(52), fit_mode="contain"))
+        else:
+            ph = Placeholder(e["name"], e["rarity"], size_hint_x=None, width=dp(52))
+            row.add_widget(ph)
+        col = RANK_COLOR.get(e["rarity"], RANK_COLOR[3])
+        btn = Button(background_normal="", background_color=(1, 1, 1, 0.05), markup=True,
+                     halign="left", valign="middle",
+                     text=(f"[b][color={col}]{C.rank_letter(e['rarity'])}[/color][/b]  {e['name']}\n"
+                           f"[size=12sp][color={MUTED}]{e['type']} · {e['date']}[/color][/size]\n"
+                           f"[size=12sp][color={MUTED}]№ {e['n']} · гарант {e['pity']} · "
+                           f"{C.BANNERS.get(e['banner'], '')}[/color][/size]"))
+        btn.bind(size=lambda w, v: setattr(w, "text_size", (v[0] - dp(12), v[1])))
+        btn.bind(on_release=lambda *_a, en=e: self.open_history_entry(en))
+        row.add_widget(btn)
+        return row
 
     def open_history_entry(self, e):
         if e:
@@ -520,8 +428,8 @@ class NteApp(App):
         box.add_widget(self.scan_status)
         self.scan_progress = ProgressBar(max=1, value=0, size_hint_y=None, height=dp(8))
         box.add_widget(self.scan_progress)
-        self.scan_rv = make_rv("ResRow", 58)
-        box.add_widget(self.scan_rv)
+        self.scan_list = PagedList(page=40)
+        box.add_widget(scrolled(self.scan_list))
         row2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
         self.scan_cancel = GBtn(text="Отменить")
         self.scan_cancel.bind(on_release=lambda *_: setattr(self, "cancel", True))
@@ -546,7 +454,7 @@ class NteApp(App):
         arc_kind = next((k for k, v in C.ARC_KINDS.items() if v == self.scan_arc_kind.text), "standard")
         self.session = S.ScanSession(self.t, paths, banner, arc_kind)
         self.cancel = False
-        self.scan_rv.data = []
+        self.scan_list.set_items([], None, "Идёт распознавание…")
         P.keep_screen_on(True)
         threading.Thread(target=self._scan_worker, args=(self.session,), daemon=True).start()
 
@@ -590,10 +498,24 @@ class NteApp(App):
 
     def _fill_scan(self):
         found = self.session.found if self.session else []
-        self.scan_rv.data = [{"text": self._row_text(p), "checked": i in self.checked,
-                              "bg": [1, 0.67, 0.25, 0.22] if p.get("needs_review") else [1, 1, 1, 0.06]}
-                             for i, p in enumerate(found)]
+        self.scan_list.set_items(list(enumerate(found)), self._scan_row,
+                                 "Ничего не распознано. Проверьте, что на скриншоте видна история бросков.")
         self.scan_add.text = f"Добавить выбранные ({len(self.checked)})"
+
+    def _scan_row(self, _i, item):
+        idx, p = item
+        row = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(6))
+        cb = CheckBox(active=idx in self.checked, size_hint_x=None, width=dp(44))
+        cb.bind(active=lambda _c, v, i=idx: self.scan_toggle(i, v))
+        row.add_widget(cb)
+        flagged = p.get("needs_review")
+        btn = Button(text=self._row_text(p), markup=True, halign="left", valign="middle",
+                     background_normal="",
+                     background_color=(1, 0.67, 0.25, 0.22) if flagged else (1, 1, 1, 0.06))
+        btn.bind(size=lambda w, v: setattr(w, "text_size", (v[0] - dp(12), v[1])))
+        btn.bind(on_release=lambda *_a, i=idx: self.scan_edit(i))
+        row.add_widget(btn)
+        return row
 
     def scan_toggle(self, idx, active):
         (self.checked.add if active else self.checked.discard)(idx)
@@ -665,7 +587,7 @@ class NteApp(App):
             except Exception as e:  # noqa: BLE001
                 return self.msg("Ошибка", str(e))
             self.session = None
-            self.scan_rv.data = []
+            self.scan_list.set_items([], None)
             self.scan_add.text = "Добавить выбранные (0)"
             self.scan_status.text = f"Добавлено круток: {w}, предметов: {r}"
             self.refresh_all()

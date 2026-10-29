@@ -5,6 +5,7 @@
 Всё считают функции из nte_core (сгенерированы из main.py) — формулы гарантов,
 правила бонусов, разбор русских дат и словари имён не переписываются.
 """
+import colorsys
 import json
 import time
 import urllib.request
@@ -14,6 +15,16 @@ from pathlib import Path
 import nte_core as C
 
 MASS_MAX_FILES = 300
+RANK_HEX = {5: "ffd740", 4: "d6a0e0", 3: "90caf9"}        # S золотой, A фиолетовый, B синий
+
+
+def pity_hex(pulls: int, hard: int = C.PITY_CHAR_HARD) -> str:
+    """Цвет числа круток: 1 — зелёный, середина — жёлтый/оранжевый, hard — красный
+    (замена pity_color из десктопа, которая зависела от QColor)."""
+    t = 0.0 if hard <= 1 else (pulls - 1) / (hard - 1)
+    t = min(max(t, 0.0), 1.0)
+    r, g, b = colorsys.hsv_to_rgb((1.0 - t) / 3.0, 0.80, 0.95)
+    return "%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
 
 class Tracker:
@@ -24,6 +35,8 @@ class Tracker:
         self.rows, self.rewards = [], []
         self.stats, self.pity_at, self.history, self.known = {}, {}, [], {}
         self.banner_info = None            # результат parse_banner_payload или None
+        self.last_banner_error = ""
+        self._icons = {}
         if self.db.profile_count():
             self.refresh()
 
@@ -49,6 +62,7 @@ class Tracker:
         events = C.build_timeline(self.rows, self.rewards)
         self.stats, self.pity_at = C.compute_stats(events)
         self.history = C.history_entries(events, self.pity_at)
+        self._icons = {}
         self.known = {}
         for r in self.rows:
             if r.get("cashback") or r["name"] in ("Персонаж", "Дуга"):
@@ -66,64 +80,181 @@ class Tracker:
         avg = (sum(s["pities"]) / len(s["pities"])) if s["pities"] else 0
         return {"title": C.POOL_TITLES[banner], "total": s["total"], "s": s["r5"], "a": s["r4"],
                 "b": s["r3"], "bonus": s["bonus"], "avg_pity": round(avg, 1),
-                "counter": s["counter"], "counter_std": s["counter_std"],
+                "qty": dict(s.get("qty", {})), "counter": s["counter"], "counter_std": s["counter_std"],
                 "counter_ev": s["counter_ev"], "last5": s["last5"]}
 
-    def banner_cards(self, now: datetime = None) -> list:
-        """Карточки текущего баннера / рерана для «Стафф»: счётчики только в окне start..end."""
+    def banner_cards(self, banner: str, now: datetime = None) -> list:
+        """Карточки панели баннеров пула (как BannerDashboard на десктопе).
+        Для не-баннерных пулов (стандартный) возвращает пустой список."""
         now = now or datetime.now()
-        info = self.banner_info or {}
+        info = self.banner_info
+        is_arc = banner == C.ARC_BANNER
+        if banner not in (C.EVENT_BANNER, C.ARC_BANNER):
+            return []
+        s = self.stats[banner]
+        if is_arc:
+            cur = dict(info["arc"]) if info and info.get("arc") else None
+            rer = dict(info["arc_rerun"]) if info and info.get("arc_rerun") else None
+            specs = (("Дуга текущего персонажа", "Не определена", cur, True, ("arc_current", "arc", "current_arc")),
+                     ("Дуга реран персонажа", "Не объявлена", rer, False, ("arc_rerun", "rerun_arc")))
+        else:
+            cur = ({"name": info["name"], "start": info.get("start"), "end": info.get("end"),
+                    "activated": info.get("activated")} if info and info.get("name") else None)
+            rer = info.get("rerun") if info else None
+            specs = (("Текущий ивентовый персонаж", "Не определён", cur, True, ("current", "event")),
+                     ("Реран персонажа", "Не объявлен", rer, False, ("rerun",)))
         cards = []
-        for title, entry in (("Текущий ивентовый персонаж", self._entry(info, "name")),
-                             ("Реран персонажа", info.get("rerun"))):
-            if not entry or not entry.get("name"):
-                cards.append({"title": title, "name": "Не определён", "countdown": C.BANNER_NO_TIME_TEXT,
-                              "kind": "none", "pulls": 0, "s": 0, "pity": 0})
-                continue
-            start, end = C.banner_pull_window(entry)
-            st = C.banner_period_stats(self.history, C.EVENT_BANNER, start, end)
+        for caption, empty, entry, is_current, generic in specs:
+            if entry is None and info is not None:
+                continue                                  # JSON получен, а этого баннера в нём нет
             text, hint, kind = C.banner_countdown(entry, now)
-            cards.append({"title": title, "name": entry["name"], "countdown": text, "hint": hint,
-                          "kind": kind, "pulls": st["pulls"], "s": st["s"], "pity": st["pity"],
-                          "entry": entry})
-        for title, entry in (("Дуга текущего персонажа", info.get("arc")),
-                             ("Дуга реран персонажа", info.get("arc_rerun"))):
-            if not entry or not entry.get("name"):
-                cards.append({"title": title, "name": "Не объявлена", "countdown": C.BANNER_NO_TIME_TEXT,
-                              "kind": "none", "pulls": 0, "s": 0, "std": 0, "ev": 0})
-                continue
-            start, end = C.banner_pull_window(entry)
-            st = C.arc_period_stats(self.history, start, end)
-            text, hint, kind = C.banner_countdown(entry, now)
-            cards.append({"title": title, "name": entry["name"], "countdown": text, "hint": hint,
-                          "kind": kind, "pulls": st["pulls"], "s": st["s"],
-                          "std": st["std"], "ev": st["ev"], "entry": entry})
+            card = {"caption": caption, "name": entry["name"] if entry else empty, "entry": entry,
+                    "countdown": text, "hint": hint, "kind": kind, "arc": is_arc, "lines": [],
+                    "art": self.banner_art(entry["name"] if entry else "", generic)}
+            lines = []
+            if is_arc:
+                std, ev = s["counter_std"], s["counter_ev"]
+                if entry:
+                    lo, hi = C.banner_pull_window(entry)
+                    st = C.arc_period_stats(self.history, lo, hi)
+                    std, ev = st["std"], st["ev"]
+                    lines.append(f"Круток за период: {st['pulls']} · S: {st['s']}")
+                    lines.append(self._period_line(entry, lo, hi))
+                elif is_current:
+                    lines.append(f"Круток в пуле: {s['total']} · S: {s['r5']}")
+                else:
+                    lines.append("Реран дуги пока не объявлен в banners.json")
+                lines.append(f"До гаранта S дуги: {max(0, C.PITY_ARC_STD - std)} · "
+                             f"ивентовой S дуги: {max(0, C.PITY_ARC_EVENT - ev)}")
+                card.update(std=std, ev=ev)
+            else:
+                pity = s["counter"]
+                if entry:
+                    lo, hi = C.banner_pull_window(entry)
+                    st = C.banner_period_stats(self.history, C.EVENT_BANNER, lo, hi)
+                    pity = st["pity"]
+                    lines.append(f"Круток за период: {st['pulls']} · S: {st['s']}")
+                    lines.append(self._period_line(entry, lo, hi))
+                elif is_current:
+                    lines.append(f"Круток в пуле: {s['total']} · S: {s['r5']}")
+                else:
+                    lines.append("Реран пока не объявлен в banners.json")
+                lines.append(f"До жёсткого гаранта осталось: {max(0, C.PITY_CHAR_HARD - pity)}")
+                card["pity"] = min(pity, C.PITY_CHAR_HARD)
+            card["lines"] = lines
+            cards.append(card)
         return cards
 
     @staticmethod
-    def _entry(info: dict, name_key: str):
-        if not info or not info.get(name_key):
-            return None
-        return {"name": info[name_key], "start": info.get("start"), "end": info.get("end")}
+    def _period_line(entry, lo, hi) -> str:
+        finish = f"{hi:%d.%m.%Y}" if hi else "…"
+        if entry.get("start"):
+            return f"Период: {entry['start']:%d.%m.%Y} — {finish}"
+        if lo:
+            return f"Учёт с {lo:%d.%m.%Y %H:%M} (старт не указан) — {finish}"
+        return f"Период: … — {finish}"
+
+    # ---------- иконки и арт ----------
+    def icon(self, name, aliases=(), rarity=None):
+        key = (name, tuple(aliases or ()), rarity)
+        if key not in self._icons:
+            try:
+                p = C.find_icon_path(name, aliases or (), rarity)
+            except Exception:  # noqa: BLE001
+                p = None
+            self._icons[key] = str(p) if p else None
+        return self._icons[key]
+
+    def banner_art(self, name, generic=()):
+        try:
+            p = C._search_banner_art(name or "", generic)
+        except Exception:  # noqa: BLE001
+            p = None
+        return str(p) if p else None
+
+    # ---------- «История выпадения S» и составы (как PoolPage на десктопе) ----------
+    def drops(self, banner: str, hide_std: bool = False) -> list:
+        is_arc = banner == C.ARC_BANNER
+        drops = [e for e in self.history
+                 if e["banner"] == banner and e["kind"] == "main" and e["rarity"] == 5]
+        if is_arc and hide_std:
+            drops = [e for e in drops
+                     if C.arc_kind_by_name(e.get("name"), e.get("arc_kind") or "") == "event"]
+        if not C.DROP_HISTORY_NEWEST_FIRST:
+            drops.reverse()
+        tiles = []
+        for e in drops:
+            if is_arc:
+                is_event = C.arc_kind_by_name(e.get("name"), e.get("arc_kind") or "") == "event"
+                pulls = e["ce"] if is_event else e["cs"]
+                hard = C.PITY_ARC_EVENT if is_event else C.PITY_ARC_STD
+                label = C.arc_short_name(e["name"])
+            else:
+                pulls, hard, label = e["p5"], C.PITY_CHAR_HARD, e["name"]
+            tiles.append({"name": e["name"], "label": label, "value": str(pulls), "rank": 5,
+                          "color": pity_hex(pulls, hard), "icon": self.icon(e["name"], e["aliases"], 5),
+                          "dim": False})
+        return tiles
+
+    def rosters(self, banner: str) -> list:
+        is_arc = banner == C.ARC_BANNER
+        groups = (C.ARC_POOL_ROSTERS.get(banner) if is_arc else C.POOL_ROSTERS.get(banner)) or []
+        counts = C.arc_roster_counts(self.history) if is_arc else C.roster_counts(self.history, banner)
+        out = []
+        for title, rarity, roster in groups:
+            tiles, owned, seen = [], 0, set()
+            if is_arc and rarity == 5:
+                known_other = {C.roster_key(n) for t2, r2, ro2 in groups if ro2 is not roster and r2 == 5
+                               for n in ro2}
+            else:
+                known_other = set()
+
+            def tile(name, n):
+                label = C.arc_short_name(name) if is_arc else name
+                if n:
+                    return {"name": name, "label": label, "value": f"×{n}", "rank": rarity,
+                            "color": RANK_HEX.get(rarity, "ffffff"), "dim": False,
+                            "icon": self.icon(name, (), rarity)}
+                return {"name": name, "label": label, "value": "—", "rank": rarity, "color": "b4b9cc",
+                        "dim": True, "icon": self.icon(name, (), rarity)}
+            for name in roster:
+                rk = C.roster_key(name)
+                seen.add(rk)
+                n = counts.get((rarity, rk), (name, 0))[1]
+                owned += bool(n)
+                tiles.append(tile(name, n))
+            for (r, rk), (name, n) in counts.items():
+                if r == rarity and rk not in seen and rk not in known_other:
+                    tiles.append(tile(name, n))
+            out.append({"title": f"{title} — получено {owned} из {len(roster)}", "tiles": tiles})
+        return out
 
     # ---------- баннеры из banners.json (без Qt; логика BannerFetchThread) ----------
     def fetch_banners(self) -> bool:
+        import ssl
         errors = []
         for url in C.BANNER_URLS:
-            try:
-                headers = {"User-Agent": C.BANNER_USER_AGENT, "Accept": "application/json",
-                           "Cache-Control": "no-cache"}
-                full = f"{url}{'&' if '?' in url else '?'}t={int(time.time())}"
-                with urllib.request.urlopen(urllib.request.Request(full, headers=headers),
-                                            timeout=C.BANNER_TIMEOUT * 3) as resp:
-                    raw = resp.read(C.BANNER_MAX_BYTES + 1)
-                if len(raw) > C.BANNER_MAX_BYTES:
-                    raise ValueError("ответ слишком большой")
-                self.banner_info = C.parse_banner_payload(json.loads(raw.decode("utf-8-sig")))
-                return True
-            except Exception as e:  # noqa: BLE001 — сеть ломается десятком способов
-                errors.append(f"{type(e).__name__}: {e}")
-        self.last_banner_error = "; ".join(errors)
+            full = f"{url}{'&' if '?' in url else '?'}t={int(time.time())}"
+            headers = {"User-Agent": C.BANNER_USER_AGENT, "Accept": "application/json",
+                       "Cache-Control": "no-cache"}
+            for verify in (True, False):
+                try:
+                    ctx = None if verify else ssl._create_unverified_context()   # noqa: SLF001
+                    req = urllib.request.Request(full, headers=headers)
+                    with urllib.request.urlopen(req, timeout=max(C.BANNER_TIMEOUT, 10), context=ctx) as resp:
+                        raw = resp.read(C.BANNER_MAX_BYTES + 1)
+                    if len(raw) > C.BANNER_MAX_BYTES:
+                        raise ValueError("ответ слишком большой")
+                    self.banner_info = C.parse_banner_payload(json.loads(raw.decode("utf-8-sig")))
+                    self.last_banner_error = "" if verify else "(без проверки сертификата)"
+                    return True
+                except ssl.SSLError as e:
+                    errors.append(f"SSL: {e}")
+                    continue                      # повтор без проверки сертификата (публичный JSON)
+                except Exception as e:  # noqa: BLE001 — сеть ломается десятком способов
+                    errors.append(f"{type(e).__name__}: {e}")
+                    break
+        self.last_banner_error = "; ".join(errors)[:300]
         return False
 
     # ---------- ручное добавление ----------
