@@ -32,9 +32,8 @@ def cache_dir() -> Path:
 
 def ensure_tessdata() -> Path:
     """Возвращает ПАПКУ-РОДИТЕЛЬ каталога tessdata (так просит TessBaseAPI.init).
-    Файлы rus/eng.traineddata лежат в <проект>/tessdata и попадают в APK как обычные
-    файлы (source.include_exts содержит traineddata). Если каталог приложения недоступен
-    для чтения нативным кодом, файлы копируются в user_data_dir."""
+    Файлы копируются без переноса прав доступа: исходники в APK read-only,
+    а копия должна оставаться перезаписываемой."""
     src = APP_DIR / "tessdata"
     if not src.is_dir():
         raise FileNotFoundError("в проекте нет папки tessdata/ с rus.traineddata и eng.traineddata "
@@ -43,8 +42,16 @@ def ensure_tessdata() -> Path:
     dst.mkdir(parents=True, exist_ok=True)
     for f in src.glob("*.traineddata"):
         target = dst / f.name
-        if not target.exists() or target.stat().st_size != f.stat().st_size:
-            shutil.copy2(f, target)
+        if target.exists() and target.stat().st_size == f.stat().st_size:
+            continue
+        if target.exists():                       # остался от прошлой версии, возможно read-only
+            try:
+                os.chmod(target, 0o644)
+                target.unlink()
+            except OSError:
+                pass
+        shutil.copyfile(f, target)                # copyfile не копирует права
+        os.chmod(target, 0o644)
     return user_data_dir()
 
 
