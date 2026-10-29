@@ -41,6 +41,9 @@ jobs:
           cp /tmp/t4a/x/jni/arm64-v8a/*.so libs/arm64-v8a/
           ls -l libs libs/arm64-v8a
 
+      - name: Rename Cyrillic asset files to ASCII
+        run: python3 tools/asciify_assets.py assets
+
       - name: Drop stale dist from cache
         run: rm -rf .buildozer/android/platform/build-arm64-v8a/dists
 

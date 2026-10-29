@@ -156,6 +156,26 @@ class Tracker:
 
     # ---------- иконки, арт, фон ----------
     @staticmethod
+    def blurred_background(src: str, cache_dir) -> str:
+        """Размытая копия фона (Pillow), как BACKGROUND_BLUR_RADIUS на десктопе; кэшируется.
+        При любой ошибке возвращается исходный файл."""
+        import os
+        try:
+            from PIL import Image, ImageFilter
+            st = os.stat(src)
+            out = Path(cache_dir) / f"bg_blur_{st.st_size}_{int(st.st_mtime)}.jpg"
+            if out.is_file():
+                return str(out)
+            side = 640                                   # рабочая копия: быстро и достаточно мягко
+            img = Image.open(src).convert("RGB")
+            img.thumbnail((side, side))
+            img = img.filter(ImageFilter.GaussianBlur(C.BACKGROUND_BLUR_RADIUS * side / C.BACKGROUND_WORK_SIDE))
+            img.save(out, "JPEG", quality=88)
+            return str(out)
+        except Exception:  # noqa: BLE001
+            return src
+
+    @staticmethod
     def find_background():
         """assets/background.(png|jpg|jpeg|webp) — как на десктопе; None, если файла нет."""
         roots = [C.app_dir()] + ([Path(C._DATA_DIR)] if C._DATA_DIR is not None else [])   # noqa: SLF001
@@ -288,6 +308,93 @@ class Tracker:
                         break                           # не про сертификаты — другой контекст не поможет
         self.last_banner_error = "; ".join(errors)[:300]
         return False
+
+    # ---------- импорт истории с ПК (JSON / CSV / файл базы .db) ----------
+    def read_import(self, path: str) -> dict:
+        """Читает файл и проверяет записи, ничего не меняя. Формат определяется по содержимому:
+        SQLite-файл (nte_wishes.db с ПК), JSON (крутки + предметы) или CSV."""
+        p = Path(path)
+        with open(p, "rb") as f:
+            head = f.read(16)
+        if head.startswith(b"SQLite format 3"):
+            return self._read_desktop_db(p)
+        raw, raw_rw = [], []
+        if p.suffix.lower() == ".csv":
+            raw = C.load_csv_records(p)
+        else:
+            raw = C.parse_game_logs(str(p))
+            if p.suffix.lower() == ".json" or head.lstrip()[:1] in (b"{", b"["):
+                raw_rw = C.load_json_rewards(p)
+        valid, errors = C.normalize_all(raw, C.normalize_record, "запись")
+        valid_rw, errors_rw = C.normalize_all(raw_rw, C.normalize_reward, "предмет")
+        return {"kind": "file", "valid": valid, "valid_rw": valid_rw, "errors": errors + errors_rw,
+                "has_rewards": bool(raw_rw)}
+
+    def _read_desktop_db(self, p: Path) -> dict:
+        import sqlite3
+        src = sqlite3.connect(str(p))
+        src.row_factory = sqlite3.Row
+        try:
+            cols = {r[1] for r in src.execute("PRAGMA table_info(wishes)")}
+            if not {"banner", "rarity", "name", "pulled_at"} <= cols:
+                raise ValueError("Это не база NTE Wish Tracker.")
+            has_pid = "profile_id" in cols
+            try:
+                profs = [dict(r) for r in src.execute("SELECT id, name FROM profiles ORDER BY id")]
+            except sqlite3.Error:
+                profs = []
+            if not profs:
+                profs = [{"id": 0, "name": "Импорт"}]
+            out = []
+            for pr in profs:
+                where, args = (" WHERE profile_id = ?", (pr["id"],)) if has_pid else ("", ())
+                wishes = [dict(r) for r in src.execute(
+                    f"SELECT {', '.join(C.WISH_COLS)} FROM wishes{where} "
+                    "ORDER BY pulled_at ASC, seq ASC, id ASC", args)]
+                try:
+                    rewards = [dict(r) for r in src.execute(
+                        f"SELECT {', '.join(C.REWARD_COLS)} FROM rewards{where} "
+                        "ORDER BY obtained_at ASC, seq ASC, id ASC", args)]
+                except sqlite3.Error:
+                    rewards = []
+                valid, errors = C.normalize_all(wishes, C.normalize_record, "запись")
+                valid_rw, errors_rw = C.normalize_all(rewards, C.normalize_reward, "предмет")
+                if valid or valid_rw:
+                    out.append({"name": pr["name"], "valid": valid, "valid_rw": valid_rw,
+                                "errors": errors + errors_rw})
+        finally:
+            src.close()
+        return {"kind": "db", "profiles": out,
+                "valid": sum(len(x["valid"]) for x in out), "valid_rw": sum(len(x["valid_rw"]) for x in out),
+                "errors": [e for x in out for e in x["errors"]]}
+
+    def apply_import(self, data: dict, into_current: bool = True) -> str:
+        """Записывает проверенные данные; дубликаты (то же название и время) пропускаются."""
+        def put(valid, valid_rw):
+            a, sk = self.db.import_records(valid) if valid else (0, 0)
+            ar, skr = self.db.import_rewards(valid_rw) if valid_rw else (0, 0)
+            return a, sk, ar, skr
+        lines = []
+        if data["kind"] == "file":
+            a, sk, ar, skr = put(data["valid"], data["valid_rw"])
+            lines.append(f"Круток добавлено: {a}, пропущено (дубликаты): {sk}")
+            if data["valid_rw"]:
+                lines.append(f"Предметов добавлено: {ar}, пропущено: {skr}")
+        else:
+            original = self.db.profile_id
+            profs = data["profiles"]
+            for pr in profs:
+                if into_current and len(profs) == 1:
+                    target = original
+                else:
+                    match = next((x for x in self.db.list_profiles() if x["name"] == pr["name"]), None)
+                    target = match["id"] if match else self.db.create_profile(pr["name"])
+                self.db.set_active_profile(target)
+                a, sk, ar, skr = put(pr["valid"], pr["valid_rw"])
+                lines.append(f"«{pr['name']}»: круток {a} (дубликатов {sk}), предметов {ar} (дубликатов {skr})")
+            self.db.set_active_profile(original)
+        self.refresh()
+        return "\n".join(lines)
 
     # ---------- ручное добавление ----------
     def add_manual(self, loot: str, banner: str, rank: int, name: str, stamp: str,

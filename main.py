@@ -109,6 +109,8 @@ class NteApp(App):
     def build(self):
         Window.clearcolor = (0.05, 0.06, 0.11, 1)
         C._DATA_DIR = str(P.user_data_dir())
+        import assets_ascii                           # иконки с русскими именами (u_<hex>.png)
+        assets_ascii.install()
         self.t = S.Tracker(P.user_data_dir() / C.DB_NAME)
         self.music = Music(self.t.db)
         self.session = None
@@ -138,7 +140,8 @@ class NteApp(App):
         root.add_widget(nav)
         self.show("staff")
         bg = S.Tracker.find_background()
-        if bg:                                        # фон: assets/background.* + затемнение
+        if bg:                                        # фон: assets/background.* (размытый) + затемнение
+            bg = S.Tracker.blurred_background(bg, P.cache_dir())
             from kivy.uix.floatlayout import FloatLayout
             outer = FloatLayout()
             outer.add_widget(BackgroundLayer(bg, size_hint=(1, 1), pos_hint={"x": 0, "y": 0}))
@@ -207,7 +210,7 @@ class NteApp(App):
         ok.bind(on_release=pop.dismiss)
         pop.open()
 
-    def ask(self, title, text, on_yes, yes="Да", no="Нет"):
+    def ask(self, title, text, on_yes, yes="Да", no="Нет", on_no=None):
         box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10))
         sv = ScrollView()
         sv.add_widget(WLabel(text=text))
@@ -218,7 +221,7 @@ class NteApp(App):
         row.add_widget(b_yes)
         box.add_widget(row)
         pop = Popup(title=title, content=box, size_hint=(0.92, 0.7), auto_dismiss=False)
-        b_no.bind(on_release=pop.dismiss)
+        b_no.bind(on_release=lambda *_: (pop.dismiss(), on_no() if on_no else None))
         b_yes.bind(on_release=lambda *_: (pop.dismiss(), on_yes()))
         pop.open()
 
@@ -696,7 +699,7 @@ class NteApp(App):
         g.add_widget(WLabel(text="[b]Данные[/b]"))
         for text, fn in (("Поделиться статистикой (картинка)", self._share_card),
                          ("Экспорт JSON", self._export_json),
-                         ("Импорт JSON", self._import_json),
+                         ("Импорт истории с ПК (JSON / CSV / .db)", self._import_json),
                          ("Резервная копия базы", self._backup),
                          ("Восстановить из копии", self._restore)):
             b = GBtn(text=text)
@@ -741,17 +744,43 @@ class NteApp(App):
         P.share_file(str(out), "Экспорт NTE")
 
     def _import_json(self):
+        """Импорт истории из файла с ПК: JSON / CSV (Экспорт на ПК) или сам файл базы nte_wishes.db."""
         def done(paths):
             if not paths:
                 return
             try:
-                p = Path(paths[0])
-                aw, sw = self.t.db.import_records(C.load_json_records(p))
-                ar, sr = self.t.db.import_rewards(C.load_json_rewards(p))
+                data = self.t.read_import(paths[0])
             except Exception as e:  # noqa: BLE001
-                return self.msg("Импорт", f"Не удалось импортировать:\n{e}")
-            self.refresh_all()
-            self.msg("Импорт", f"Круток добавлено: {aw}, пропущено: {sw}\nПредметов добавлено: {ar}, пропущено: {sr}")
+                return self.msg("Импорт", f"Не удалось прочитать файл:\n{type(e).__name__}: {e}")
+            if not data["valid"] and not data["valid_rw"]:
+                extra = "\n".join(data["errors"][:8])
+                return self.msg("Импорт", "В файле не найдено корректных записей." + (f"\n\n{extra}" if extra else ""))
+            text = f"Найдено корректных записей: {data['valid']}" if data["kind"] == "db" else \
+                   f"Найдено корректных записей: {len(data['valid'])}"
+            if data["kind"] == "db":
+                text += f"\nПредметов: {data['valid_rw']}\nПрофилей в файле: " + \
+                        ", ".join(f"«{p['name']}»" for p in data["profiles"])
+            elif data["has_rewards"]:
+                text += f"\nНайдено предметов: {len(data['valid_rw'])}"
+            if data["errors"]:
+                text += f"\nПропущено с ошибками: {len(data['errors'])}\n" + "\n".join(data["errors"][:4])
+
+            def run(into_current):
+                try:
+                    report = self.t.apply_import(data, into_current)
+                except Exception as e:  # noqa: BLE001
+                    return self.msg("Импорт", f"Ошибка импорта:\n{type(e).__name__}: {e}")
+                self.refresh_all()
+                self.msg("Импорт завершён", report)
+
+            if data["kind"] == "db" and len(data["profiles"]) == 1:
+                cur = (self.t.db.active_profile() or {}).get("name", "")
+                self.ask("Импорт базы с ПК", text + f"\n\nДобавить в текущий профиль «{cur}»?\n"
+                         "(«По именам» — вместо этого создать/дополнить профиль с именем из файла)",
+                         lambda: run(True), "В текущий", "По именам", on_no=lambda: run(False))
+            else:
+                self.ask("Импорт", text + "\n\nИмпортировать? Дубликаты будут пропущены.",
+                         lambda: run(True))
         P.pick_images(done, multiple=False, mime="*/*")
 
     def _backup(self):
