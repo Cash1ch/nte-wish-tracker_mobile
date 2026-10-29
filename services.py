@@ -154,7 +154,19 @@ class Tracker:
             return f"Учёт с {lo:%d.%m.%Y %H:%M} (старт не указан) — {finish}"
         return f"Период: … — {finish}"
 
-    # ---------- иконки и арт ----------
+    # ---------- иконки, арт, фон ----------
+    @staticmethod
+    def find_background():
+        """assets/background.(png|jpg|jpeg|webp) — как на десктопе; None, если файла нет."""
+        roots = [C.app_dir()] + ([Path(C._DATA_DIR)] if C._DATA_DIR is not None else [])   # noqa: SLF001
+        for ext in C.BACKGROUND_EXTS:
+            for root in roots:
+                for base in C.ICON_DIR_NAMES:
+                    p = root / base / f"{C.BACKGROUND_NAME}{ext}"
+                    if p.is_file():
+                        return str(p)
+        return None
+
     def icon(self, name, aliases=(), rarity=None):
         key = (name, tuple(aliases or ()), rarity)
         if key not in self._icons:
@@ -230,30 +242,50 @@ class Tracker:
         return out
 
     # ---------- баннеры из banners.json (без Qt; логика BannerFetchThread) ----------
-    def fetch_banners(self) -> bool:
+    @staticmethod
+    def _ssl_contexts() -> list:
+        """Контексты по очереди: certifi, системные сертификаты Android, умолчание Python и, в самом
+        конце, без проверки (публичный JSON с названиями и датами баннеров)."""
+        import os
         import ssl
+        ctxs = []
+        try:
+            import certifi
+            ctxs.append((ssl.create_default_context(cafile=certifi.where()), "certifi"))
+        except Exception:  # noqa: BLE001
+            pass
+        for d in ("/system/etc/security/cacerts", "/apex/com.android.conscrypt/cacerts"):
+            if os.path.isdir(d):
+                try:
+                    c = ssl.create_default_context()
+                    c.load_verify_locations(capath=d)
+                    ctxs.append((c, "системные"))
+                except Exception:  # noqa: BLE001
+                    pass
+        ctxs.append((None, "умолчание"))
+        ctxs.append((ssl._create_unverified_context(), "без проверки сертификата"))   # noqa: SLF001
+        return ctxs
+
+    def fetch_banners(self) -> bool:
         errors = []
         for url in C.BANNER_URLS:
             full = f"{url}{'&' if '?' in url else '?'}t={int(time.time())}"
             headers = {"User-Agent": C.BANNER_USER_AGENT, "Accept": "application/json",
                        "Cache-Control": "no-cache"}
-            for verify in (True, False):
+            for ctx, label in self._ssl_contexts():
                 try:
-                    ctx = None if verify else ssl._create_unverified_context()   # noqa: SLF001
                     req = urllib.request.Request(full, headers=headers)
                     with urllib.request.urlopen(req, timeout=max(C.BANNER_TIMEOUT, 10), context=ctx) as resp:
                         raw = resp.read(C.BANNER_MAX_BYTES + 1)
                     if len(raw) > C.BANNER_MAX_BYTES:
                         raise ValueError("ответ слишком большой")
                     self.banner_info = C.parse_banner_payload(json.loads(raw.decode("utf-8-sig")))
-                    self.last_banner_error = "" if verify else "(без проверки сертификата)"
+                    self.last_banner_error = ""
                     return True
-                except ssl.SSLError as e:
-                    errors.append(f"SSL: {e}")
-                    continue                      # повтор без проверки сертификата (публичный JSON)
-                except Exception as e:  # noqa: BLE001 — сеть ломается десятком способов
-                    errors.append(f"{type(e).__name__}: {e}")
-                    break
+                except Exception as e:  # noqa: BLE001 — urllib оборачивает SSLError в URLError
+                    errors.append(f"{label}: {type(e).__name__}")
+                    if "CERTIFICATE" not in str(e).upper() and "SSL" not in str(e).upper():
+                        break                           # не про сертификаты — другой контекст не поможет
         self.last_banner_error = "; ".join(errors)[:300]
         return False
 

@@ -156,10 +156,11 @@ class Group(Glass):
 class BannerCard(FloatLayout):
     """Плитка баннера: арт «cover» + затемнение + текст; без арта — стеклянная карточка."""
     def __init__(self, c, **kw):
-        super().__init__(size_hint_y=None, height=dp(230 if c.get("art") else 200), **kw)
+        super().__init__(size_hint_y=None, height=dp(290 if c["arc"] else 240), **kw)
         if c.get("art"):
-            self.add_widget(Image(source=c["art"], fit_mode="cover", size_hint=(1, 1)))
-            shade = FloatLayout(size_hint=(1, 1))
+            self.add_widget(Image(source=c["art"], fit_mode="cover", size_hint=(1, 1),
+                                  pos_hint={"x": 0, "y": 0}))
+            shade = FloatLayout(size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
             with shade.canvas:
                 from kivy.graphics import Color, Rectangle
                 Color(0, 0, 0, 0.55)
@@ -172,7 +173,8 @@ class BannerCard(FloatLayout):
                 Color(1, 1, 1, 0.07)
                 self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(14)])
             self.bind(pos=self._sync_bg, size=self._sync_bg)
-        col = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(3), size_hint=(1, 1))
+        col = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(3), size_hint=(1, 1),
+                        pos_hint={"x": 0, "y": 0})
         col.add_widget(WLabel(text=f"[color=cfd2e0]{c['caption']}[/color]", font_size=dp(11)))
         col.add_widget(WLabel(text=f"[b]{c['name']}[/b]", font_size=dp(21)))
         gold = c["kind"] == "live"
@@ -233,3 +235,19 @@ class PagedList(BoxLayout):
             self._more_btn = GBtn(text=f"Показать ещё ({len(self.items) - end})")
             self._more_btn.bind(on_release=self._more)
             self.add_widget(self._more_btn)
+
+
+class BackgroundLayer(FloatLayout):
+    """Фон приложения (assets/background.*) с затемнением rgba(15, 15, 25, 0.75), как на десктопе.
+    Размытия в Kivy нет — вместо него заливка потемнее."""
+    def __init__(self, path, **kw):
+        super().__init__(**kw)
+        self.add_widget(Image(source=path, fit_mode="cover", size_hint=(1, 1), pos_hint={"x": 0, "y": 0}))
+        from kivy.graphics import Color, Rectangle
+        with self.canvas.after:
+            Color(15 / 255, 15 / 255, 25 / 255, 0.75)
+            self._shade = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync, size=self._sync)
+
+    def _sync(self, *_):
+        self._shade.pos, self._shade.size = self.pos, self.size

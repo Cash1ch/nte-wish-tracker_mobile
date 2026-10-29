@@ -42,7 +42,7 @@ import platform_android as P                                                # no
 import services as S                                                        # noqa: E402
 from share_card import render_share_card
 from services import RANK_HEX, pity_hex
-from widgets import BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
+from widgets import BackgroundLayer, BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
 
 RANK_COLOR = {5: "ffd740", 4: "d6a0e0", 3: "90caf9"}        # S золотой, A фиолетовый, B синий
 MUTED = "9a9eb0"
@@ -137,6 +137,14 @@ class NteApp(App):
             nav.add_widget(btn)
         root.add_widget(nav)
         self.show("staff")
+        bg = S.Tracker.find_background()
+        if bg:                                        # фон: assets/background.* + затемнение
+            from kivy.uix.floatlayout import FloatLayout
+            outer = FloatLayout()
+            outer.add_widget(BackgroundLayer(bg, size_hint=(1, 1), pos_hint={"x": 0, "y": 0}))
+            root.size_hint, root.pos_hint = (1, 1), {"x": 0, "y": 0}
+            outer.add_widget(root)
+            root = outer
         Window.bind(on_keyboard=self._on_key)
         Clock.schedule_interval(self._tick, 1)
         Clock.schedule_once(lambda _dt: self._startup(), 0.2)
