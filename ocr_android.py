@@ -120,6 +120,34 @@ class AndroidTesseract:
         return "\n".join(" ".join(ws) for ws in lines)
 
 
+_JAVA = {}      # кэш Java-классов: заполняется из ГЛАВНОГО потока (см. preload_java)
+
+JAVA_CLASSES = ("com.googlecode.tesseract.android.TessBaseAPI",
+                "com.googlecode.tesseract.android.ResultIterator",
+                "com.googlecode.tesseract.android.PageIterator",
+                "java.io.File")
+
+
+def preload_java() -> None:
+    """Загружает Java-классы Tesseract4Android ИЗ ГЛАВНОГО ПОТОКА.
+
+    Python-потоки на Android ищут классы системным загрузчиком, который не видит классы
+    приложения (ClassNotFoundException ... DexPathList[[directory "."]]). Главный поток видит
+    их, а pyjnius кэширует найденные классы, поэтому потом они доступны и из потока OCR.
+    Бросает исключение, если класса нет в APK вообще."""
+    from jnius import autoclass
+    for name in JAVA_CLASSES:
+        _JAVA[name] = autoclass(name)
+
+
+def _jclass(name: str):
+    if name in _JAVA:
+        return _JAVA[name]
+    from jnius import autoclass
+    _JAVA[name] = autoclass(name)
+    return _JAVA[name]
+
+
 class JavaTessBackend:
     """Tesseract4Android: com.googlecode.tesseract.android.TessBaseAPI (через pyjnius).
 
@@ -138,14 +166,13 @@ class JavaTessBackend:
             return []
 
     def _api(self, lang: str, oem: int):
-        from jnius import autoclass
         key = (lang, oem)
         if key not in self._apis:
             have = set(self.languages())
             need = set(lang.split("+"))
             if not need <= have:
                 raise TesseractError(f"нет языковых файлов: {sorted(need - have)}")
-            api = autoclass("com.googlecode.tesseract.android.TessBaseAPI")()
+            api = _jclass("com.googlecode.tesseract.android.TessBaseAPI")()
             if not api.init(self.parent, lang, oem):
                 api.recycle()
                 raise TesseractError(f"Tesseract не инициализировался для {lang}")
@@ -153,8 +180,7 @@ class JavaTessBackend:
         return self._apis[key]
 
     def recognize(self, png_path, lang, psm, oem, variables):
-        from jnius import autoclass
-        File = autoclass("java.io.File")
+        File = _jclass("java.io.File")
         api, applied = self._api(lang, oem)
         for k in list(applied):                       # сбрасываем переменные прошлого запуска
             if k not in variables:

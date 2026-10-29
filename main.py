@@ -265,6 +265,11 @@ class NteApp(App):
     def _startup(self):
         P.request_permissions()
         if P.ON_ANDROID:
+            try:                                  # классы Tesseract надо найти в ГЛАВНОМ потоке
+                ocr_android.preload_java()
+            except Exception as e:  # noqa: BLE001
+                self.msg("OCR", "В APK нет Java-классов Tesseract4Android:\n"
+                                f"{type(e).__name__}: {e}")
             threading.Thread(target=self._prepare_ocr, daemon=True).start()
         if not self.t.has_profile:
             self._ask_nickname()
