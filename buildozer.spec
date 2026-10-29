@@ -23,7 +23,8 @@ android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.enable_androidx = True
 
-android.add_aars = libs/tesseract4android-4.9.0.aar
+android.add_jars = libs/tesseract4android.jar
+android.add_libs_arm64_v8a = libs/arm64-v8a/*.so
 
 presplash.color = #0d0f1d
 
