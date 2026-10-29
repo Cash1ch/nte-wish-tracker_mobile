@@ -62,16 +62,57 @@ def norm(text: str) -> str:
     return unicodedata.normalize("NFC", str(text)).strip().lower().replace("ё", "е")
 
 
+BUILD_MARK = "icons-v3 (bytes API)"
+
+
+def _mojibake(name: str):
+    """'Ð¥Ð¾Ñ‚Ð¾Ñ€Ð¸' -> 'Хотори': UTF-8, прочитанный как Latin-1."""
+    if any(ch in name for ch in "ÐÑ"):
+        try:
+            return name.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return None
+
+
+def _raw_files(folder: Path):
+    """Файлы папки как БАЙТЫ: так имена не зависят от того, как Python декодирует файловую систему."""
+    base = os.fsencode(str(folder))
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    out = []
+    for raw in sorted(names):
+        full = base + b"/" + raw
+        stem, ext = os.path.splitext(raw)
+        if os.path.isfile(full) and ext.decode("ascii", "ignore").lower() in C.ICON_EXTS:
+            out.append((raw, stem, ext.decode("ascii", "ignore").lower(), full))
+    return out
+
+
+def _cached_copy(full: bytes, ext: str) -> Path:
+    dst = _cache_dir() / f"{hashlib.md5(full).hexdigest()}{ext}"
+    try:
+        size = os.stat(full).st_size
+        if not dst.is_file() or dst.stat().st_size != size:
+            with open(full, "rb") as src, open(dst, "wb") as out:
+                shutil.copyfileobj(src, out)
+        return dst
+    except OSError:
+        return Path(full.decode("utf-8", "replace"))
+
+
 def _dir_index(folder: Path) -> dict:
     key = str(folder)
     if key not in _INDEX:
         idx = {}
-        try:
-            for p in sorted(folder.iterdir()):
-                if p.is_file() and p.suffix.lower() in C.ICON_EXTS:
-                    idx.setdefault(norm(decode_stem(p.stem)), _safe_path(p))
-        except OSError:
-            pass
+        for raw, stem, ext, full in _raw_files(folder):
+            name = stem.decode("utf-8", "replace")
+            path = Path(full.decode("ascii")) if raw.isascii() else _cached_copy(full, ext)
+            for variant in (decode_stem(name), _mojibake(name)):
+                if variant:
+                    idx.setdefault(norm(variant), path)
         _INDEX[key] = idx
     return _INDEX[key]
 
@@ -113,17 +154,21 @@ def search_icon(name: str):
 
 def describe() -> str:
     """Что реально лежит в assets/ на устройстве (для диагностики)."""
-    lines = []
+    import sys
+    lines = [f"Поиск иконок: {BUILD_MARK}; кодировка ФС: {sys.getfilesystemencoding()}"]
     for folder in C.asset_dirs():
         if not folder.is_dir():
             continue
-        try:
-            files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in C.ICON_EXTS)
-        except OSError as e:
-            lines.append(f"{folder}: не читается ({e})")
-            continue
-        sample = ", ".join(decode_stem(p.stem) for p in files[:4])
-        lines.append(f"{folder.name}/: {len(files)} шт. {('— ' + sample) if sample else ''}")
+        files = _raw_files(folder)
+        names = []
+        for _raw, stem, _ext, _full in files[:4]:
+            name = stem.decode("utf-8", "replace")
+            names.append(decode_stem(name))
+        lines.append(f"{folder.name}/: {len(files)} шт. " + (("— " + ", ".join(names)) if names else ""))
+    bad = next(((r, s) for r, s, _e, _f in (x for f in C.asset_dirs() if f.is_dir() for x in _raw_files(f))
+                if not r.isascii()), None)
+    if bad:
+        lines.append(f"Пример сырого имени: {ascii(bad[0])[:70]}")
     return "\n".join(lines) or "Папка assets/ с иконками на устройстве не найдена."
 
 
