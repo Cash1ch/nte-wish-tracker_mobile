@@ -50,6 +50,13 @@ jobs:
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
 
+      - name: Check APK for Tesseract classes
+        if: always()
+        run: |
+          ls -l bin/*.apk || true
+          for f in bin/*.apk; do unzip -p "$f" 'classes*.dex' | strings | grep -c "TessBaseAPI" || true; done
+          unzip -l bin/*.apk | grep -E "libtesseract|libleptonica|libjpeg|libpng" || true
+
       - name: Show the real error
         if: failure()
         run: grep -n -B3 -A30 -E "What went wrong|FAILURE:|Could not resolve|Execution failed|error:" build.log | head -200
