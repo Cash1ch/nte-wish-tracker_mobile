@@ -5,7 +5,7 @@ package.domain = org.nte
 source.dir = .
 source.include_exts = py,png,jpg,kv,json,traineddata,mp3,ogg,wav,ttf
 source.include_patterns = assets/*,assets/*/*,tessdata/*
-source.exclude_dirs = tests,tools,bin,.buildozer,__pycache__,.git
+source.exclude_dirs = tests,tools,bin,.buildozer,__pycache__,.git,libs
 version = 0.1.0
 
 requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0,numpy,pillow,opencv,pyjnius,android,certifi,androidstorage4kivy
@@ -23,8 +23,7 @@ android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.enable_androidx = True
 
-android.gradle_dependencies = cz.adaptech.tesseract4android:tesseract4android:4.9.0
-android.add_gradle_repositories = "maven { url 'https://jitpack.io' }"
+android.add_aars = libs/tesseract4android-4.9.0.aar
 
 presplash.color = #0d0f1d
 
