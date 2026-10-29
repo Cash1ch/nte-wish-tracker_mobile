@@ -17,6 +17,7 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
+            ~/.android/debug.keystore
           key: buildozer-v2-${{ github.run_id }}
           restore-keys: buildozer-v2-
 
@@ -59,6 +60,7 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
+            ~/.android/debug.keystore
           key: buildozer-v2-${{ github.run_id }}
 
       - name: Check APK for Tesseract classes

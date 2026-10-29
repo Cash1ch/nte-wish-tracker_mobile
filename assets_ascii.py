@@ -62,7 +62,7 @@ def norm(text: str) -> str:
     return unicodedata.normalize("NFC", str(text)).strip().lower().replace("ё", "е")
 
 
-BUILD_MARK = "icons-v3 (bytes API)"
+BUILD_MARK = "icons-v4 (bytes API + FFxx)"
 
 
 def _mojibake(name: str):
@@ -73,6 +73,28 @@ def _mojibake(name: str):
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
     return None
+
+
+def _ff_unwrap(name: str):
+    """Имена после распаковки APK на ряде телефонов: каждый байт UTF-8 исходного имени превращён в
+    символ U+FF00+байт (байт 0xD0 -> U+FFD0). Возвращаем исходное русское имя."""
+    if not any(0xFF80 <= ord(c) <= 0xFFFF for c in name):
+        return None
+    try:
+        raw = bytes((ord(c) - 0xFF00) if ord(c) >= 0xFF80 else ord(c) for c in name)
+        return raw.decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def best_name(stem_bytes: bytes) -> str:
+    """Лучшая расшифровка имени файла (для индекса и диагностики)."""
+    name = stem_bytes.decode("utf-8", "replace")
+    for fn in (_ff_unwrap, _mojibake):
+        v = fn(name)
+        if v:
+            return decode_stem(v)
+    return decode_stem(name)
 
 
 def _raw_files(folder: Path):
@@ -108,9 +130,9 @@ def _dir_index(folder: Path) -> dict:
     if key not in _INDEX:
         idx = {}
         for raw, stem, ext, full in _raw_files(folder):
-            name = stem.decode("utf-8", "replace")
             path = Path(full.decode("ascii")) if raw.isascii() else _cached_copy(full, ext)
-            for variant in (decode_stem(name), _mojibake(name)):
+            name = stem.decode("utf-8", "replace")
+            for variant in (best_name(stem), decode_stem(name), _mojibake(name), _ff_unwrap(name)):
                 if variant:
                     idx.setdefault(norm(variant), path)
         _INDEX[key] = idx
@@ -162,8 +184,7 @@ def describe() -> str:
         files = _raw_files(folder)
         names = []
         for _raw, stem, _ext, _full in files[:4]:
-            name = stem.decode("utf-8", "replace")
-            names.append(decode_stem(name))
+            names.append(best_name(stem))
         lines.append(f"{folder.name}/: {len(files)} шт. " + (("— " + ", ".join(names)) if names else ""))
     bad = next(((r, s) for r, s, _e, _f in (x for f in C.asset_dirs() if f.is_dir() for x in _raw_files(f))
                 if not r.isascii()), None)
