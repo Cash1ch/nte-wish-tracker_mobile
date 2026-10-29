@@ -11,6 +11,15 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
 
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ github.run_id }}
+          restore-keys: buildozer-
+
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -20,6 +29,14 @@ jobs:
       - name: Install Buildozer
         run: pip install "buildozer==1.5.0" "cython==0.29.36" virtualenv
 
+      - name: Download Tesseract4Android AAR
+        run: |
+          mkdir -p libs
+          curl -fL --retry 8 --retry-delay 20 --retry-all-errors \
+            -o libs/tesseract4android-4.9.0.aar \
+            https://jitpack.io/cz/adaptech/tesseract4android/tesseract4android/4.9.0/tesseract4android-4.9.0.aar
+          ls -l libs
+
       - name: Build APK
         run: |
           set -o pipefail
@@ -28,6 +45,15 @@ jobs:
       - name: Show the real error
         if: failure()
         run: grep -n -B3 -A30 -E "What went wrong|FAILURE:|Could not resolve|Execution failed|error:" build.log | head -200
+
+      - name: Save build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v4
         if: always()
