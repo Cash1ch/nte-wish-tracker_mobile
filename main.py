@@ -42,7 +42,8 @@ import platform_android as P                                                # no
 import services as S                                                        # noqa: E402
 from share_card import render_share_card
 from services import RANK_HEX, pity_hex
-from widgets import WelcomeOverlay, BackgroundLayer, BannerCard, Glass, GBtn, Group, PagedList, Placeholder, WLabel, bar, hex_rgba  # noqa: F401                                    # noqa: E402
+from widgets import (WelcomeOverlay, BackgroundLayer, BannerCard, Glass, GBtn, Group, PagedList,       # noqa: E402,F401
+                     Placeholder, TabButton, Toast, WLabel, bar, hex_rgba)
 
 RANK_COLOR = {5: "ffd740", 4: "d6a0e0", 3: "90caf9"}        # S золотой, A фиолетовый, B синий
 MUTED = "9a9eb0"
@@ -120,6 +121,7 @@ class NteApp(App):
         self.ocr_ready = not P.ON_ANDROID                  # на ПК работает обычный pytesseract
         self.countdowns = []                               # (Label, entry) — живые таймеры баннеров
         self.pool = C.EVENT_BANNER
+        self._sharing = False                              # идёт ли сейчас сборка карточки
 
         root = BoxLayout(orientation="vertical")
         self.pages = BoxLayout()
@@ -132,9 +134,8 @@ class NteApp(App):
                                     ("add", "Добавить", self._build_add),
                                     ("settings", "Настройки", self._build_settings)):
             self.screens[key] = builder()
-            btn = ToggleButton(text=title, group="nav", allow_no_selection=False,
-                               background_normal="", background_down="",
-                               background_color=(1, 1, 1, 0.08), font_size=dp(13))
+            btn = TabButton(text=title, group="nav", allow_no_selection=False, edge="top",
+                            idle_alpha=0.08, font_size=dp(13))
             btn.bind(on_release=lambda b, k=key: self.show(k))
             self.nav_buttons[key] = btn
             nav.add_widget(btn)
@@ -297,10 +298,9 @@ class NteApp(App):
         tabs = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(4), padding=(dp(6), 0))
         self.pool_tabs = {}
         for key, title in POOLS:
-            b = ToggleButton(text=title, group="pool", allow_no_selection=False, font_size=dp(12),
-                             background_normal="", background_down="",
-                             background_color=(1, 1, 1, 0.10), halign="center",
-                             state="down" if key == self.pool else "normal")
+            b = TabButton(text=title, group="pool", allow_no_selection=False, font_size=dp(12),
+                          edge="bottom", idle_alpha=0.10, halign="center",
+                          state="down" if key == self.pool else "normal")
             b.bind(width=lambda w, v: setattr(w, "text_size", (v - dp(8), None)))
             b.bind(on_release=lambda _b, k=key: self._set_pool(k))
             self.pool_tabs[key] = b
@@ -344,6 +344,14 @@ class NteApp(App):
                                    font_size=dp(24), halign="center"))
             stats.add_widget(card)
         col.add_widget(stats)
+
+        share_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        b_share, b_save = GBtn(text="Поделиться", height=dp(44)), GBtn(text="В галерею", height=dp(44))
+        b_share.bind(on_release=lambda *_: self.share_stats(self.pool))
+        b_save.bind(on_release=lambda *_: self.share_stats(self.pool, save_only=True))
+        share_row.add_widget(b_share)
+        share_row.add_widget(b_save)
+        col.add_widget(share_row)
 
         chips = [(k, C.CUBE_TITLES[k]) for k in C.POOL_CUBES.get(pool, ()) if k != "cube" or s["qty"].get("cube")]
         if chips:
@@ -711,7 +719,9 @@ class NteApp(App):
 
         g = Glass()
         g.add_widget(WLabel(text="[b]Данные[/b]"))
-        for text, fn in (("Поделиться статистикой (картинка)", self._share_card),
+        for text, fn in (("Поделиться статистикой — текущий пул", lambda: self.share_stats(self.pool)),
+                         ("Поделиться статистикой — все пулы", lambda: self.share_stats(None)),
+                         ("Сохранить карточку в галерею", lambda: self.share_stats(self.pool, save_only=True)),
                          ("Экспорт JSON", self._export_json),
                          ("Импорт истории с ПК (JSON / CSV / .db)", self._import_json),
                          ("Диагностика (иконки, OCR, баннеры)", self._diagnostics),
@@ -743,12 +753,46 @@ class NteApp(App):
         self.t.db.load_active()
         self.refresh_all()
 
-    def _share_card(self):
-        out = str(P.cache_dir() / "share_card.png")
+    # ------------------------------------------------------------------ «Поделиться»
+    def toast(self, text, secs=3.0):
+        Toast.show(self.outer, text, secs)
+
+    def share_stats(self, key=None, save_only=False):
+        """Карточка статистики как на ПК (ShareCardRenderer): рисуется в фоне, затем — системное окно
+        «Поделиться» (или сохранение в Pictures/NTE). key — пул открытой вкладки, None — все пулы."""
+        if not self.t.has_profile:
+            return self.msg("Профиль", "Сначала создайте профиль.")
+        if self._sharing:
+            return
+        self._sharing = True
+        self.toast("Собираю карточку статистики…", 2.0)
         reg = resource_find("data/fonts/Roboto-Regular.ttf")
         bold = resource_find("data/fonts/Roboto-Bold.ttf")
-        render_share_card(self.t, out, reg, bold)
-        P.share_file(out, "Статистика NTE")
+        out = str(P.cache_dir() / f"NTE_Stats_{datetime.now():%Y%m%d_%H%M%S}.png")
+
+        def work():
+            err = None
+            try:
+                render_share_card(self.t, out, reg, bold, only_key=key)
+            except Exception as e:  # noqa: BLE001
+                import traceback
+                traceback.print_exc()
+                err = f"{type(e).__name__}: {e}"
+            Clock.schedule_once(lambda _dt: self._share_done(out, err, save_only), 0)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _share_done(self, path, err, save_only):
+        self._sharing = False
+        if err:
+            return self.msg("Поделиться", f"Не удалось собрать карточку:\n{err}")
+        try:
+            if save_only:
+                where = P.save_to_gallery(path)
+                self.toast(f"Карточка сохранена: {where}")
+            else:
+                P.share_file(path, "Статистика NTE", "image/png")
+        except Exception as e:  # noqa: BLE001
+            self.msg("Поделиться", f"{type(e).__name__}: {e}")
 
     def _export_json(self):
         import json

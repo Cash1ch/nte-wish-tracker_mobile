@@ -12,6 +12,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+import imgutil
 import nte_core as C
 
 MASS_MAX_FILES = 300
@@ -194,7 +195,7 @@ class Tracker:
                 p = C.find_icon_path(name, aliases or (), rarity)
             except Exception:  # noqa: BLE001
                 p = None
-            self._icons[key] = str(p) if p else None
+            self._icons[key] = imgutil.thumb(p) if p else None   # чистое уменьшение вместо рваного
         return self._icons[key]
 
     def banner_art(self, name, generic=()):

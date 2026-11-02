@@ -137,6 +137,26 @@ def test_manual_add_all_types():
         pass
 
 
+def test_share_card_and_thumbs():
+    """Карточка «Поделиться» (порт ShareCardRenderer) рисуется без Qt/Kivy, миниатюры иконок квадратные."""
+    from PIL import Image
+    import share_card
+    import imgutil
+    t, d = make_tracker()
+    C._DATA_DIR = d
+    t.add_manual("character", C.EVENT_BANNER, 5, "Хотори", "2026-05-01 10:00:00")
+    t.add_manual("arc", C.ARC_BANNER, 5, "Последняя роза", "2026-05-01 10:01:00", arc_kind="event")
+    for key in (None, C.EVENT_BANNER, C.STANDARD_BANNER, C.ARC_BANNER):
+        out = os.path.join(d, f"card_{key}.png")
+        share_card.render_share_card(t, out, None, None, only_key=key, size=(1280, 720))
+        with Image.open(out) as im:
+            assert im.size == (1280, 720)
+    ic = t.icon("Хотори", (), 5)
+    if ic:
+        with Image.open(ic) as im:
+            assert max(im.size) <= imgutil.THUMB_PX
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

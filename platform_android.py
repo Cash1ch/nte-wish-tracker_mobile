@@ -68,7 +68,7 @@ def request_permissions(callback=None) -> None:
 # Выбор файлов (системный SAF-диалог) и камера — своя реализация на pyjnius, без сторонних
 # библиотек: ошибки не глотаются, а показываются окном и пишутся в logcat (тег python).
 # ---------------------------------------------------------------------------
-def _show_error(text: str) -> None:
+def _show_error(text: str, title: str = "Выбор файла") -> None:
     print("NTE picker error:", text)
     try:
         from kivy.clock import Clock
@@ -79,7 +79,7 @@ def _show_error(text: str) -> None:
         def show(_dt):
             lbl = Label(text=text, halign="left", valign="top")
             lbl.bind(size=lambda w, s: setattr(w, "text_size", (s[0] - dp(12), None)))
-            Popup(title="Выбор файла", content=lbl, size_hint=(0.92, 0.5)).open()
+            Popup(title=title, content=lbl, size_hint=(0.92, 0.5)).open()
         Clock.schedule_once(show, 0)
     except Exception:
         pass
@@ -261,12 +261,75 @@ def take_photo(callback) -> None:
         _show_error(f"Не удалось открыть камеру:\n{type(e).__name__}: {e}")
 
 
-def share_file(path: str, title: str = "Поделиться") -> None:
+def _mime_for(path: str) -> str:
+    import mimetypes
+    return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _media_insert(path: str, mime: str = None, folder: str = "NTE"):
+    """Копирует файл в общее хранилище через MediaStore и возвращает content:// Uri.
+
+    Картинки попадают в Pictures/<folder> (видны в галерее), остальное — в Download/<folder>.
+    FileProvider и разрешения на хранилище не нужны (Android 10+, как и камера выше).
+    Именно из-за отсутствия FileProvider в сборке не работал androidstorage4kivy.ShareSheet."""
+    from jnius import autoclass                                               # type: ignore
+    act = autoclass("org.kivy.android.PythonActivity").mActivity
+    ContentValues = autoclass("android.content.ContentValues")
+    FileInputStream = autoclass("java.io.FileInputStream")
+    FileUtils = autoclass("android.os.FileUtils")                             # API 29+
+    resolver = act.getContentResolver()
+    mime = mime or _mime_for(path)
+    values = ContentValues()
+    values.put("_display_name", Path(path).name)
+    values.put("mime_type", mime)
+    if mime.startswith("image/"):
+        collection = autoclass("android.provider.MediaStore$Images$Media").EXTERNAL_CONTENT_URI
+        values.put("relative_path", f"Pictures/{folder}")
+    else:
+        collection = autoclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI
+        values.put("relative_path", f"Download/{folder}")
+    uri = resolver.insert(collection, values)
+    if uri is None:
+        raise OSError("MediaStore не создал запись для файла")
+    ins = FileInputStream(str(path))
+    outs = resolver.openOutputStream(uri)
+    try:
+        FileUtils.copy(ins, outs)
+    finally:
+        ins.close()
+        outs.close()
+    return uri
+
+
+def save_to_gallery(path: str) -> str:
+    """Сохраняет картинку в Pictures/NTE. Возвращает человекочитаемое место или бросает исключение."""
+    if not ON_ANDROID:
+        print("save:", path)
+        return str(path)
+    _media_insert(path, _mime_for(path))
+    return "Pictures/NTE"
+
+
+def share_file(path: str, title: str = "Поделиться", mime: str = None) -> None:
+    """Системное окно «Поделиться» (ACTION_SEND) для файла: картинки, JSON, копия базы."""
     if not ON_ANDROID:
         print("share:", path)
         return
-    from androidstorage4kivy import ShareSheet                                # type: ignore
-    ShareSheet().share_file(path)
+    try:
+        from jnius import autoclass, cast                                     # type: ignore
+        Intent = autoclass("android.content.Intent")
+        String = autoclass("java.lang.String")
+        act = autoclass("org.kivy.android.PythonActivity").mActivity
+        mime = mime or _mime_for(path)
+        uri = _media_insert(path, mime)
+        intent = Intent(Intent.ACTION_SEND)
+        intent.setType(mime)
+        intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        chooser = Intent.createChooser(intent, cast("java.lang.CharSequence", String(title)))
+        act.startActivity(chooser)
+    except Exception as e:  # noqa: BLE001
+        _show_error(f"Не удалось поделиться файлом:\n{type(e).__name__}: {e}", "Поделиться")
 
 
 def keep_screen_on(flag: bool = True) -> None:

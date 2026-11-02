@@ -40,7 +40,8 @@ Builder.load_string("""
 <Tile>:
     orientation: 'vertical'
     size_hint: None, None
-    size: dp(78), dp(118)
+    width: dp(78)
+    height: self.minimum_height
     padding: dp(4)
     spacing: dp(2)
     canvas.before:
@@ -55,9 +56,41 @@ Builder.load_string("""
         Line:
             rounded_rectangle: (self.x, self.y, self.width, self.height, dp(10))
             width: 1
+<TabButton>:
+    background_normal: ''
+    background_down: ''
+    background_color: (1, 0.84, 0.25, 0.22) if self.state == 'down' else (1, 1, 1, root.idle_alpha)
+    color: (1, 0.84, 0.25, 1) if self.state == 'down' else (0.80, 0.82, 0.90, 1)
+    bold: self.state == 'down'
+    canvas.after:
+        Color:
+            rgba: (1, 0.84, 0.25, 1) if self.state == 'down' else (0, 0, 0, 0)
+        Rectangle:
+            pos: (self.x, self.top - dp(3)) if root.edge == 'top' else (self.x, self.y)
+            size: self.width, dp(3)
+<Toast>:
+    size_hint: None, None
+    text_size: self.size
+    halign: 'center'
+    valign: 'middle'
+    bold: True
+    color: 1, 1, 1, 1
+    canvas.before:
+        Color:
+            rgba: 0.09, 0.11, 0.19, 0.95
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+        Color:
+            rgba: 1, 0.84, 0.25, 0.7
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, dp(14))
+            width: 1
 """)
 
-from kivy.properties import BooleanProperty                                  # noqa: E402
+from kivy.properties import BooleanProperty, NumericProperty, StringProperty  # noqa: E402
+from kivy.uix.togglebutton import ToggleButton                               # noqa: E402
 
 RANK_RGB = {5: (1, 0.84, 0.25), 4: (0.84, 0.63, 0.88), 3: (0.56, 0.79, 0.98)}
 
@@ -72,6 +105,35 @@ class Glass(BoxLayout):
 
 class GBtn(Button):
     pass
+
+
+class TabButton(ToggleButton):
+    """Вкладка: выбранная подсвечена золотым текстом, тонированной заливкой и полоской у края
+    (edge: 'top' — для нижнего меню, 'bottom' — для вкладок пулов)."""
+    edge = StringProperty("bottom")
+    idle_alpha = NumericProperty(0.08)
+
+
+class Toast(Label):
+    """Всплывающая плашка (аналог toast на десктопе): появляется, висит и гаснет."""
+    @classmethod
+    def show(cls, parent, text, secs=3.0):
+        from kivy.animation import Animation
+        from kivy.clock import Clock
+        from kivy.core.window import Window
+        max_w = max(dp(160), Window.width - dp(80))
+        probe = Label(text=text, bold=True, text_size=(max_w, None))      # меряем текст, затем задаём размер плашки
+        probe.texture_update()
+        t = cls(text=text)
+        t.size = (min(probe.texture_size[0], max_w) + dp(36), probe.texture_size[1] + dp(24))
+        t.pos_hint = {"center_x": 0.5}
+        t.y = dp(90)
+        t.opacity = 0
+        parent.add_widget(t)
+        anim = Animation(opacity=1, d=0.2) + Animation(opacity=1, d=secs) + Animation(opacity=0, d=0.4)
+        anim.bind(on_complete=lambda *_: parent.remove_widget(t))
+        anim.start(t)
+        return t
 
 
 class WLabel(Label):
@@ -113,14 +175,14 @@ class Tile(BoxLayout):
         super().__init__(**kw)
         self.dim = dim
         if icon:
-            pic = Image(source=icon, size_hint_y=None, height=dp(64), fit_mode="contain",
+            pic = Image(source=icon, size_hint_y=None, height=dp(70), fit_mode="contain",
                         opacity=0.35 if dim else 1)
         else:
-            pic = Placeholder(name, rank, size_hint_y=None, height=dp(64))
+            pic = Placeholder(name, rank, size_hint_y=None, height=dp(70))
             if dim:
                 pic.opacity = 0.4
         self.add_widget(pic)
-        nm = Label(text=label or name, font_size=dp(11), size_hint_y=None, height=dp(30),
+        nm = Label(text=label or name, font_size=dp(11), size_hint_y=None, height=dp(24),
                    halign="center", valign="middle", shorten=True, shorten_from="right",
                    max_lines=2, color=(1, 1, 1, 0.75 if dim else 1))
         nm.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
